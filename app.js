@@ -50,7 +50,6 @@
   };
 
   const STATUS_LABELS = { want: '想读', reading: '在读', finished: '已读' };
-  const TONE_LABELS = { neutral: '关联', bond: '亲情/友好', love: '爱情/羁绊', rival: '对立/宿敌', mentor: '师徒/传承' };
   const NOTE_TYPE_LABELS = { reflection: '读后感', quote: '书摘', scan: '扫描' };
   const GOAL_PRESETS = [12, 24, 36, 50, 100];
 
@@ -569,30 +568,9 @@
     </div>`;
   }
 
-  function coverBox(book, extraStyle = '') {
-    return `<div class="book-cover-box" style="--spine-bg:${esc(book.spineColor)};${extraStyle}">
-      ${typoCover(book)}
-      ${book.coverUrl ? `<img src="${esc(book.coverUrl)}" alt="${esc(book.title)}封面" loading="lazy" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">` : ''}
-    </div>`;
-  }
-
   function starValueText(rating) {
     if (!rating) return '未评分';
     return `${rating.toFixed(1).replace(/\.0$/, '')} 星`;
-  }
-
-  function miniStars(rating) {
-    if (!rating) return '';
-    const full = Math.floor(rating + 1e-6);
-    const half = rating - full >= 0.5;
-    let html = '<span class="mini-stars">';
-    for (let i = 1; i <= 5; i++) {
-      if (i <= full) html += '★';
-      else if (i === full + 1 && half) html += '⯨';
-      else html += '<span class="off">★</span>';
-    }
-    html += `<span class="mini-star-num">${starValueText(rating)}</span></span>`;
-    return html;
   }
 
   function matchesSearch(book, q) {
