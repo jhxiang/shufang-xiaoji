@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Xcode
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+ios/build/
+ios/DerivedData/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# 原生壳内同步的 Web 资源（由 scripts/sync-web-assets.sh 生成）
+ios/ShufangXiaoji/WebApp/*
+!ios/ShufangXiaoji/WebApp/.gitkeep
+
+# 构建日志
+xcodebuild.log
+
+# 编辑器
+.vscode/
+.idea/
+node_modules/

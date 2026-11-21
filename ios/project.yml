@@ -1,0 +1,46 @@
+name: ShufangXiaoji
+options:
+  bundleIdPrefix: com.shufang
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    ENABLE_BITCODE: "NO"
+    TARGETED_DEVICE_FAMILY: "1,2"
+
+targets:
+  ShufangXiaoji:
+    type: application
+    platform: iOS
+    sources:
+      - path: ShufangXiaoji
+        excludes:
+          - "Info.plist"
+          - "WebApp"
+      # 以 folder reference 方式打包，保持目录结构（Bundle 内可用 WebApp/index.html 定位）
+      - path: ShufangXiaoji/WebApp
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shufang.xiaoji
+        INFOPLIST_FILE: ShufangXiaoji/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
+        SUPPORTS_MACCATALYST: "NO"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        GENERATE_INFOPLIST_FILE: "NO"
+        ALWAYS_SEARCH_USER_PATHS: "NO"
+    info:
+      path: ShufangXiaoji/Info.plist
