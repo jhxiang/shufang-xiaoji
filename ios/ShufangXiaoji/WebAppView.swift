@@ -51,6 +51,27 @@ final class WebAppViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.969, green: 0.957, blue: 0.933, alpha: 1)
         configureWebView()
         loadApp()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(persistBeforeBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(persistBeforeBackground),
+            name: UIApplication.willTerminateNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    /// App 进入后台/终止前，主动让 Web 端把内存数据落盘到原生快照。
+    @objc private func persistBeforeBackground() {
+        runJS("window.__shufangFlush && window.__shufangFlush();")
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -102,13 +123,19 @@ final class WebAppViewController: UIViewController {
 
     /// 让页面适配安全区：把 iOS 安全区高度传给 CSS 变量。
     private func makeViewportScript() -> WKUserScript {
+        // 注入磁盘快照（若有），页面启动时可同步读到，无需等待异步桥接
+        var snapshotScript = "window.__shufangSnapshot = null;"
+        if let snapshot = PersistentStore.shared.loadSnapshot(),
+           !snapshot.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: [snapshot], options: []),
+           let json = String(data: data, encoding: .utf8) {
+            // json 形如 ["..."]，取内层即为合法 JS 字符串字面量
+            snapshotScript = "window.__shufangSnapshot = \(String(json.dropFirst().dropLast()));"
+        }
+
         let js = """
+        \(snapshotScript)
         (function(){
-          function applyInsets(){
-            var cs = getComputedStyle(document.documentElement);
-            var top = cs.getPropertyValue('--native-safe-top');
-            if (top) return;
-          }
           window.__shufangNative = true;
           document.documentElement.classList.add('native-shell');
         })();
@@ -172,6 +199,12 @@ extension WebAppViewController: WKScriptMessageHandler {
             handleSetTheme(body)
         case "pickPhoto":
             presentPhotoPicker(camera: body["camera"] as? Bool ?? false, completion: nil)
+        case "saveSnapshot":
+            if let data = body["data"] as? String, !data.isEmpty {
+                PersistentStore.shared.saveSnapshot(data)
+            }
+        case "clearSnapshot":
+            PersistentStore.shared.clearSnapshot()
         default:
             NSLog("[书房小记] 未知的桥接消息: %@", type)
         }

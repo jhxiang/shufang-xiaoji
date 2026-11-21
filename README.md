@@ -85,7 +85,7 @@ python3 -m http.server 8899
 .
 ├── index.html            # 单页结构：4 个主页面 + 7 个底部弹层
 ├── styles.css            # 双主题变量、书脊 3D、导图、计时器
-├── app.js                # 状态管理、IndexedDB、全部业务逻辑
+├── app.js                # 状态管理、存储层、全部业务逻辑
 ├── catalog.js            # 28 本精选书 + 35 条经典书摘
 ├── audio.js              # Web Audio 环境音合成
 ├── mindmap.js            # SVG 人物关系导图 + PNG 导出
@@ -94,6 +94,13 @@ python3 -m http.server 8899
 ├── icon.svg / icon-*.png / AppIcon-1024.png
 ├── scripts/sync-web-assets.sh   # 同步 Web 资源到 iOS bundle
 ├── ios/                  # SwiftUI + WKWebView 原生外壳（XcodeGen）
+│   └── ShufangXiaoji/
+│       ├── ShufangXiaojiApp.swift   # @main 入口
+│       ├── WebAppView.swift         # WKWebView + JS Bridge
+│       ├── LocalSchemeHandler.swift # shufang://app/ 本地协议
+│       ├── VisionOCR.swift          # Apple Vision 文字识别
+│       ├── DictationService.swift   # 语音听写
+│       └── PersistentStore.swift    # 原生磁盘快照
 └── .github/workflows/    # Pages 部署 + 未签名 IPA 构建
 ```
 
@@ -113,6 +120,7 @@ python3 -m http.server 8899
 | `startDictation` / `stopDictation` | 中文语音实时听写 |
 | `setTheme` | 同步外观到原生状态栏 |
 | `pickPhoto` | 原生相机 / 相册选择 |
+| `saveSnapshot` / `clearSnapshot` | 数据落盘到 App 沙盒（自定义 scheme 下 IndexedDB 不可靠） |
 
 ### GitHub Actions 自动构建
 
@@ -143,11 +151,13 @@ open ShufangXiaoji.xcodeproj
 
 | 能力 | App 内 | 网页端 |
 | --- | --- | --- |
-| 数据存储 | IndexedDB | IndexedDB（异常时 localStorage） |
+| 数据存储 | 原生磁盘快照（Application Support/snapshot.json） | IndexedDB（异常时 localStorage） |
 | OCR | Apple Vision | 豆包识图（需 Key）/ 仅保存图片 |
 | 语音 | SFSpeechRecognizer | SpeechRecognition（Safari 支持）/ 提示不可用 |
 | 分享图片 | 系统分享面板 | `navigator.share` → `a[download]` 兜底 |
 | 联网搜书 | URLSession 代理 | 直接 fetch（Google Books → Open Library → 内置精选） |
+
+> **为什么 App 内不用 IndexedDB？** WKWebView 在自定义 URL scheme（`shufang://`）下对 IndexedDB / localStorage 的持久化并不可靠，可能出现「退出 App 后数据消失」。因此 App 内改为「内存数据 + 原生 JSON 快照」：Web 端每次写入后防抖 320ms 调用 `saveSnapshot` 桥接，原生写入 `Application Support/ShufangXiaoji/snapshot.json`；启动时由 `WKUserScript` 在 `documentStart` 注入 `window.__shufangSnapshot`，页面同步读取即可秒开。App 切后台或即将终止时，原生还会主动调用 `window.__shufangFlush()` 强制落盘。
 
 ---
 

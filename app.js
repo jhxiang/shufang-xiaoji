@@ -84,6 +84,7 @@
   }
 
   async function dbAll(store) {
+    if (bridge.available) return memAll(store);
     if (idbBroken) return memAll(store);
     try {
       const db = await openDB();
@@ -96,7 +97,7 @@
     } catch { idbBroken = true; return memAll(store); }
   }
   async function dbPut(store, value) {
-    if (idbBroken) return memPut(store, value);
+    if (bridge.available || idbBroken) { memPut(store, value); return; }
     try {
       const db = await openDB();
       return await new Promise((resolve, reject) => {
@@ -108,7 +109,7 @@
     } catch { idbBroken = true; memPut(store, value); }
   }
   async function dbDel(store, key) {
-    if (idbBroken) return memDel(store, key);
+    if (bridge.available || idbBroken) { memDel(store, key); return; }
     try {
       const db = await openDB();
       return await new Promise((resolve, reject) => {
@@ -120,7 +121,7 @@
     } catch { idbBroken = true; memDel(store, key); }
   }
   async function dbClear(store) {
-    if (idbBroken) { memClear(store); return; }
+    if (bridge.available || idbBroken) { memClear(store); return; }
     try {
       const db = await openDB();
       return await new Promise((resolve, reject) => {
@@ -132,10 +133,26 @@
     } catch { idbBroken = true; memClear(store); }
   }
 
-  /* localStorage 兜底（IndexedDB 被禁用时） */
+  /* =============================== 本地存储 ===============================
+   * 网页端：IndexedDB（异常时降级 localStorage）
+   * 原生 App：自定义 scheme 下 WebKit 无法稳定持久化 IndexedDB/localStorage，
+   *          因此改用「内存数据 + 原生磁盘快照」方案，保证数据不丢。
+   * ====================================================================== */
+
   const memKey = (s) => `shufang.mem.${s}`;
-  function memAll(store) { try { return JSON.parse(localStorage.getItem(memKey(store)) || '[]'); } catch { return []; } }
-  function memWrite(store, arr) { try { localStorage.setItem(memKey(store), JSON.stringify(arr)); } catch { /* 存储已满 */ } }
+
+  const memCache = { books: null, sessions: null, meta: null, kv: null };
+  let nativeSaveTimer = null;
+
+  function memAll(store) {
+    if (memCache[store]) return memCache[store].slice();
+    try { return JSON.parse(localStorage.getItem(memKey(store)) || '[]'); } catch { return []; }
+  }
+  function memWrite(store, arr) {
+    memCache[store] = arr.slice();
+    if (bridge.available) { scheduleNativeSave(); return; }
+    try { localStorage.setItem(memKey(store), JSON.stringify(arr)); } catch { /* 存储已满 */ }
+  }
   function memPut(store, value) {
     const arr = memAll(store);
     const i = arr.findIndex((x) => x.id === value.id || x.key === value.key);
@@ -146,6 +163,64 @@
     memWrite(store, memAll(store).filter((x) => x.id !== key && x.key !== key));
   }
   function memClear(store) { memWrite(store, []); }
+
+  /* ---- 原生磁盘快照 ---- */
+  function snapshotPayload() {
+    return JSON.stringify({
+      version: DB_VER,
+      savedAt: Date.now(),
+      books: memCache.books || memAll('books'),
+      sessions: memCache.sessions || memAll('sessions'),
+      meta: memCache.meta || memAll('meta'),
+      kv: memCache.kv || { timer: null },
+    });
+  }
+
+  function scheduleNativeSave() {
+    clearTimeout(nativeSaveTimer);
+    nativeSaveTimer = setTimeout(() => {
+      try { bridge.post({ type: 'saveSnapshot', data: snapshotPayload() }); } catch { /* ignore */ }
+    }, 320);
+  }
+
+  function flushNativeSave() {
+    clearTimeout(nativeSaveTimer);
+    try { bridge.post({ type: 'saveSnapshot', data: snapshotPayload() }); } catch { /* ignore */ }
+  }
+
+  /** 原生端在页面加载后回调，把磁盘快照交还 Web 端 */
+  function hydrateFromNative(json) {
+    let data = null;
+    try { data = typeof json === 'string' ? JSON.parse(json) : json; } catch { data = null; }
+    if (!data) return false;
+    memCache.books = Array.isArray(data.books) ? data.books : [];
+    memCache.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    memCache.meta = Array.isArray(data.meta) ? data.meta : [];
+    memCache.kv = data.kv && typeof data.kv === 'object' ? data.kv : { timer: null, theme: null };
+    return true;
+  }
+
+  /* ---- 键值存储（计时状态 / 主题） ---- */
+  function kvGet(key) {
+    if (bridge.available) {
+      const kv = memCache.kv || memAll('kv') || {};
+      return kv[key] == null ? null : kv[key];
+    }
+    try { return localStorage.getItem(`shufang.${key}`); } catch { return null; }
+  }
+  function kvSet(key, value) {
+    if (bridge.available) {
+      const kv = memCache.kv || {};
+      kv[key] = value;
+      memCache.kv = kv;
+      scheduleNativeSave();
+      return;
+    }
+    try {
+      if (value == null) localStorage.removeItem(`shufang.${key}`);
+      else localStorage.setItem(`shufang.${key}`, value);
+    } catch { /* ignore */ }
+  }
 
   /* =============================== 原生桥接 =============================== */
   const bridge = (() => {
@@ -210,6 +285,20 @@
   /* 由原生侧回调 */
   window.ShufangNative = {
     isNative: bridge.available,
+    /** 原生端注入磁盘快照后调用 */
+    hydrate(json) {
+      const ok = hydrateFromNative(json);
+      if (ok) {
+        state.books = memCache.books.map(normalizeBook);
+        state.sessions = memCache.sessions || [];
+        state.meta = {};
+        (memCache.meta || []).forEach((r) => { state.meta[r.key] = r.value; });
+        applyTheme();
+        renderAll();
+        restoreTimer();
+      }
+      return ok;
+    },
     onFetchResult(requestId, ok, body) {
       const item = pendingRequests.get(requestId);
       if (!item) return;
@@ -243,6 +332,11 @@
       setNoteImage(dataUrl);
       runOcr(dataUrl);
     },
+  };
+
+  // 原生端可主动触发落盘（App 切后台 / 即将退出）
+  window.__shufangFlush = () => {
+    try { flushNativeSave(); } catch { /* ignore */ }
   };
 
   // 原生权限被拒时的提示
@@ -301,6 +395,13 @@
   const getMeta = (key, fallback) => (key in state.meta ? state.meta[key] : fallback);
   async function setMeta(key, value) {
     state.meta[key] = value;
+    if (bridge.available) {
+      const arr = memCache.meta || memAll('meta');
+      const i = arr.findIndex((r) => r.key === key);
+      if (i >= 0) arr[i] = { key, value }; else arr.push({ key, value });
+      memWrite('meta', arr);
+      return;
+    }
     await dbPut('meta', { key, value });
   }
 
@@ -1625,7 +1726,7 @@
 
   function restoreTimer() {
     try {
-      const raw = localStorage.getItem('shufang.timer');
+      const raw = kvGet('timer');
       if (!raw) return;
       const t = JSON.parse(raw);
       if (!t || !t.bookId) return;
@@ -1642,7 +1743,7 @@
   }
 
   function persistTimer() {
-    try { localStorage.setItem('shufang.timer', JSON.stringify(state.timer)); } catch { /* ignore */ }
+    try { kvSet('timer', JSON.stringify(state.timer)); } catch { /* ignore */ }
   }
 
   function elapsedSeconds() {
@@ -2943,8 +3044,10 @@
       state.sessions = [];
       state.meta = {};
       state.selectedBookId = null;
-      localStorage.removeItem('shufang.timer');
+      kvSet('timer', null);
       state.timer = { bookId: null, running: false, startedAt: 0, elapsedMs: 0, ambient: 'off' };
+      memCache.kv = { timer: null, theme: 'auto' };
+      flushNativeSave();
       applyTheme();
       renderShelf(); renderDaily(); renderStats(); renderSettings();
       toast('已清空本地数据');
@@ -3303,13 +3406,28 @@ ${libraryDigest() || '（暂无）'}
   }
 
   async function init() {
-    try {
-      await loadAll();
-    } catch {
-      state.books = memAll('books').map(normalizeBook);
-      state.sessions = memAll('sessions');
+    // 原生 App：磁盘快照由原生端在 documentStart 注入，避免自定义 scheme 下
+    // IndexedDB / localStorage 不可持久化导致数据丢失。
+    if (bridge.available) {
+      try {
+        if (window.__shufangSnapshot) hydrateFromNative(window.__shufangSnapshot);
+      } catch { /* ignore */ }
+    }
+
+    if (bridge.available && memCache.books) {
+      state.books = memCache.books.map(normalizeBook);
+      state.sessions = memCache.sessions || [];
       state.meta = {};
-      memAll('meta').forEach((r) => { state.meta[r.key] = r.value; });
+      (memCache.meta || []).forEach((r) => { state.meta[r.key] = r.value; });
+    } else {
+      try {
+        await loadAll();
+      } catch {
+        state.books = memAll('books').map(normalizeBook);
+        state.sessions = memAll('sessions');
+        state.meta = {};
+        memAll('meta').forEach((r) => { state.meta[r.key] = r.value; });
+      }
     }
 
     applyTheme();
@@ -3328,6 +3446,15 @@ ${libraryDigest() || '（暂无）'}
     restoreTimer();
     updateTimerUI();
     registerSW();
+
+    // 离开 / 切后台时立即落盘，避免丢数据
+    if (bridge.available) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) flushNativeSave();
+      });
+      window.addEventListener('pagehide', flushNativeSave);
+      window.addEventListener('beforeunload', flushNativeSave);
+    }
 
     // 首次进入且无数据：轻提示
     if (!state.books.length) {

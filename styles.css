@@ -2720,3 +2720,55 @@ textarea.form-control {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ===== 原生 App 外壳（WKWebView）适配 ===== */
+html.native-shell {
+  /* 原生容器已处理安全区外框，这里仅保留底部 tabbar 的内边距 */
+  --safe-top: 0px;
+}
+
+html.native-shell .install-banner,
+html.native-shell #safariInstallGuideCard {
+  display: none !important;
+}
+
+html.native-shell .topbar {
+  padding-top: 10px;
+}
+
+/* 原生环境禁用文本选中与长按菜单，接近原生手感 */
+html.native-shell,
+html.native-shell button,
+html.native-shell .book-spine,
+html.native-shell .tab-btn {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 允许输入框选择文字 */
+html.native-shell input,
+html.native-shell textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 原生滚动更接近系统行为 */
+html.native-shell .sheet-body {
+  overscroll-behavior-y: contain;
+}
+
+/* 书脊在长按/点击时不要弹出上下文菜单 */
+.book-spine,
+.book-cover-box,
+.frontispiece-card {
+  -webkit-touch-callout: none;
+}
+
+/* 无障碍：尊重减少动态效果偏好 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
