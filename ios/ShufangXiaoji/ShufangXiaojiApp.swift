@@ -17,7 +17,7 @@ struct ShufangXiaojiApp: App {
         WindowGroup {
             WebAppView()
                 .environmentObject(themeStore)
-                .ignoresSafeArea(.keyboard, edges: .bottom)
+                .ignoresSafeArea()
                 .preferredColorScheme(themeStore.isDark ? .dark : .light)
         }
     }

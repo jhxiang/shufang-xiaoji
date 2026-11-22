@@ -317,7 +317,13 @@
       }
     },
     onDictation(text) {
-      if (text) appendToNoteText(String(text));
+      if (!text) return;
+      const ta = $('#noteContentInput');
+      if (!ta) return;
+      const prefix = state.dictationPrefix != null ? state.dictationPrefix : ta.value;
+      const sep = prefix && !prefix.endsWith('\n') ? '\n' : '';
+      ta.value = `${prefix}${sep}${String(text)}`;
+      ta.scrollTop = ta.scrollHeight;
     },
     onDictationEnd() {
       stopDictationUI();
@@ -1451,20 +1457,18 @@
       renderDaily();
     });
 
-    buildStarPicker($('#detailStarPicker'), book.rating, async (v) => {
-      book.rating = v;
-      await saveBook(book, true);
-      const label = $('#detailRatingLabel');
-      if (label) label.textContent = starValueText(v);
-      buildStarPicker($('#detailStarPicker'), v, async (nv) => {
-        book.rating = nv;
+    const renderDetailStars = () => {
+      buildStarPicker($('#detailStarPicker'), book.rating, async (v) => {
+        book.rating = v;
         await saveBook(book, true);
-        if (label) label.textContent = starValueText(nv);
-        buildStarPicker($('#detailStarPicker'), nv, () => {});
+        const label = $('#detailRatingLabel');
+        if (label) label.textContent = starValueText(v);
+        renderDetailStars();
+        renderShelf();
         renderStats();
       });
-      renderStats();
-    });
+    };
+    renderDetailStars();
 
     body.querySelector('[data-dact="minus10"]')?.addEventListener('click', async () => {
       book.progress = clamp(book.progress - 10, 0, 100);
@@ -1969,6 +1973,7 @@
 
   function stopDictationUI() {
     state.dictating = false;
+    state.dictationPrefix = null;
     $('#voiceInputBtn')?.classList.remove('recording');
     const label = $('#voiceBtnLabel');
     if (label) label.textContent = '🎙 语音输入';
@@ -1989,6 +1994,8 @@
     if (state.dictating) { stopDictation(); return; }
 
     if (bridge.available) {
+      const ta = $('#noteContentInput');
+      state.dictationPrefix = ta ? ta.value : '';
       const ok = bridge.post({ type: 'startDictation', locale: 'zh-CN' });
       if (ok) {
         state.dictating = true;
@@ -1996,6 +2003,7 @@
         if (label) label.textContent = '🎙 正在聆听…点击停止';
         return;
       }
+      state.dictationPrefix = null;
     }
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3015,6 +3023,9 @@
 
     $('#loadDemoBooksBtn')?.addEventListener('click', loadDemoBooks);
     $('#clearAllBtn')?.addEventListener('click', async () => {
+      if (!window.confirm('确定要清空所有书籍、读书笔记和阅读记录吗？此操作无法撤销（建议先导出 JSON 备份）。')) {
+        return;
+      }
       await dbClear('books');
       await dbClear('sessions');
       await dbClear('meta');

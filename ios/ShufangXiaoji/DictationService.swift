@@ -86,7 +86,7 @@ final class DictationService {
                     }
                     if result.isFinal {
                         DispatchQueue.main.async { self.onEnd() }
-                        self.stop(notify: true)
+                        self.stop(notify: false)
                     }
                 }
                 if error != nil {

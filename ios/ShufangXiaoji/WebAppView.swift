@@ -39,8 +39,6 @@ final class WebAppViewController: UIViewController {
 
     private var webView: WKWebView!
     private var dictation: DictationService?
-    private var fileInputCompletion: (([URL]?) -> Void)?
-    private var pendingShareURL: URL?
 
     private static let appEntry = "shufang://app/index.html"
 
@@ -359,18 +357,6 @@ extension WebAppViewController: WKScriptMessageHandler {
 
 extension WebAppViewController: WKNavigationDelegate, WKUIDelegate {
 
-    /// 让 <input type="file" accept="image/*"> 唤起原生相机 / 相册
-    @available(iOS 14.0, *)
-    func webView(_ webView: WKWebView,
-                 runOpenPanelWith parameters: WKOpenPanelParameters,
-                 initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping ([URL]?) -> Void) {
-        fileInputCompletion = completionHandler
-        presentPhotoPicker(camera: false) { [weak self] in
-            self?.fileInputCompletion = nil
-        }
-    }
-
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else {
             decisionHandler(.allow); return
@@ -412,20 +398,23 @@ extension WebAppViewController: WKNavigationDelegate, WKUIDelegate {
     // MARK: Photo picker
 
     private func presentPhotoPicker(camera: Bool, completion: (() -> Void)?) {
-        if camera, UIImagePickerController.isSourceTypeAvailable(.camera) {
-            let picker = UIImagePickerController()
-            picker.sourceType = .camera
-            picker.delegate = self
-            present(picker, animated: true, completion: completion)
-            return
-        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if camera, UIImagePickerController.isSourceTypeAvailable(.camera) {
+                let picker = UIImagePickerController()
+                picker.sourceType = .camera
+                picker.delegate = self
+                self.present(picker, animated: true, completion: completion)
+                return
+            }
 
-        var config = PHPickerConfiguration(photoLibrary: .shared())
-        config.filter = .images
-        config.selectionLimit = 1
-        let picker = PHPickerViewController(configuration: config)
-        picker.delegate = self
-        present(picker, animated: true, completion: completion)
+            var config = PHPickerConfiguration(photoLibrary: .shared())
+            config.filter = .images
+            config.selectionLimit = 1
+            let picker = PHPickerViewController(configuration: config)
+            picker.delegate = self
+            self.present(picker, animated: true, completion: completion)
+        }
     }
 }
 
@@ -437,30 +426,17 @@ extension WebAppViewController: PHPickerViewControllerDelegate, UIImagePickerCon
         picker.dismiss(animated: true)
         guard let provider = results.first?.itemProvider,
               provider.canLoadObject(ofClass: UIImage.self) else {
-            fileInputCompletion?(nil)
-            fileInputCompletion = nil
             return
         }
         provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
-            guard let self = self else { return }
-            guard let image = object as? UIImage,
+            guard let self = self,
+                  let image = object as? UIImage,
                   let data = image.jpegData(compressionQuality: 0.85) else {
-                self.fileInputCompletion?(nil)
-                self.fileInputCompletion = nil
                 return
             }
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("scan-\(Int(Date().timeIntervalSince1970)).jpg")
-            try? data.write(to: url)
+            let base64 = data.base64EncodedString()
             DispatchQueue.main.async {
-                if let completion = self.fileInputCompletion {
-                    completion([url])
-                    self.fileInputCompletion = nil
-                } else {
-                    // 没有 file input 场景：直接把图片回传 Web 端
-                    let base64 = data.base64EncodedString()
-                    self.runJS("ShufangNative && ShufangNative.onPhotoPicked(\(self.jsLiteral(base64)))")
-                }
+                self.runJS("ShufangNative && ShufangNative.onPhotoPicked(\(self.jsLiteral(base64)))")
             }
         }
     }
@@ -469,26 +445,14 @@ extension WebAppViewController: PHPickerViewControllerDelegate, UIImagePickerCon
         picker.dismiss(animated: true)
         guard let image = info[.originalImage] as? UIImage,
               let data = image.jpegData(compressionQuality: 0.85) else {
-            fileInputCompletion?(nil)
-            fileInputCompletion = nil
             return
         }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("scan-\(Int(Date().timeIntervalSince1970)).jpg")
-        try? data.write(to: url)
-        if let completion = fileInputCompletion {
-            completion([url])
-            fileInputCompletion = nil
-        } else {
-            let base64 = data.base64EncodedString()
-            runJS("ShufangNative && ShufangNative.onPhotoPicked(\(jsLiteral(base64)))")
-        }
+        let base64 = data.base64EncodedString()
+        runJS("ShufangNative && ShufangNative.onPhotoPicked(\(jsLiteral(base64)))")
     }
 
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
         picker.dismiss(animated: true)
-        fileInputCompletion?(nil)
-        fileInputCompletion = nil
     }
 }
 

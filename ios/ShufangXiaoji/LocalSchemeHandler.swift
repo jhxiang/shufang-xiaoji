@@ -19,6 +19,7 @@ final class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
 
     private let resourceRoot: URL?
     private let queue = DispatchQueue(label: "com.shufang.xiaoji.scheme", qos: .userInitiated)
+    private var stoppedTasks = Set<ObjectIdentifier>()
 
     override init() {
         if let root = Bundle.main.url(forResource: "WebApp", withExtension: nil) {
@@ -54,32 +55,44 @@ final class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         let fileURL = root.appendingPathComponent(relativePath)
-        queue.async {
+        let taskId = ObjectIdentifier(urlSchemeTask)
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            if self.stoppedTasks.remove(taskId) != nil { return }
+
             guard FileManager.default.fileExists(atPath: fileURL.path) else {
                 // 单页应用：未知路径回落到 index.html
                 let fallback = root.appendingPathComponent("index.html")
                 guard let data = try? Data(contentsOf: fallback) else {
-                    urlSchemeTask.didFailWithError(SchemeError.notFound)
+                    if self.stoppedTasks.remove(taskId) == nil {
+                        urlSchemeTask.didFailWithError(SchemeError.notFound)
+                    }
                     return
                 }
-                self.respond(urlSchemeTask, data: data, mime: "text/html", url: fileURL)
+                self.respond(urlSchemeTask, taskId: taskId, data: data, mime: "text/html", url: fileURL)
                 return
             }
 
             guard let data = try? Data(contentsOf: fileURL) else {
-                urlSchemeTask.didFailWithError(SchemeError.notFound)
+                if self.stoppedTasks.remove(taskId) == nil {
+                    urlSchemeTask.didFailWithError(SchemeError.notFound)
+                }
                 return
             }
             let mime = LocalSchemeHandler.mimeType(for: fileURL.pathExtension)
-            self.respond(urlSchemeTask, data: data, mime: mime, url: fileURL)
+            self.respond(urlSchemeTask, taskId: taskId, data: data, mime: mime, url: fileURL)
         }
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        // 静态资源读取很快，无需中断
+        let taskId = ObjectIdentifier(urlSchemeTask)
+        queue.async { [weak self] in
+            self?.stoppedTasks.insert(taskId)
+        }
     }
 
-    private func respond(_ task: WKURLSchemeTask, data: Data, mime: String, url: URL) {
+    private func respond(_ task: WKURLSchemeTask, taskId: ObjectIdentifier, data: Data, mime: String, url: URL) {
+        if stoppedTasks.remove(taskId) != nil { return }
         guard let response = HTTPURLResponse(
             url: task.request.url ?? url,
             statusCode: 200,

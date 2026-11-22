@@ -2722,18 +2722,9 @@ textarea.form-control {
 }
 
 /* ===== 原生 App 外壳（WKWebView）适配 ===== */
-html.native-shell {
-  /* 原生容器已处理安全区外框，这里仅保留底部 tabbar 的内边距 */
-  --safe-top: 0px;
-}
-
 html.native-shell .install-banner,
 html.native-shell #safariInstallGuideCard {
   display: none !important;
-}
-
-html.native-shell .topbar {
-  padding-top: 10px;
 }
 
 /* 原生环境禁用文本选中与长按菜单，接近原生手感 */
