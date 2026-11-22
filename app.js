@@ -3821,11 +3821,11 @@ ${libraryDigest() || '（暂无）'}
     if (toRemove.length) {
       const rmIds = new Set(toRemove.map((b) => b.id));
       for (const b of toRemove) {
-        await dbDelete('books', b.id);
+        await dbDel('books', b.id);
       }
       const rmSessions = state.sessions.filter((s) => rmIds.has(s.bookId));
       for (const s of rmSessions) {
-        await dbDelete('sessions', s.id);
+        await dbDel('sessions', s.id);
       }
       state.books = state.books.filter((b) => !rmIds.has(b.id));
       state.sessions = state.sessions.filter((s) => !rmIds.has(s.bookId));
@@ -3895,7 +3895,7 @@ ${libraryDigest() || '（暂无）'}
     }
 
     applyTheme();
-    await purgeLegacyDemoBooks();
+    try { await purgeLegacyDemoBooks(); } catch { /* ignore */ }
     bindStatic();
 
     const theme = getMeta('theme', 'auto');
