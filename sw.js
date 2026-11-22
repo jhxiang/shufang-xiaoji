@@ -1,4 +1,4 @@
-const CACHE_NAME = 'shufang-xiaoji-v1-11';
+const CACHE_NAME = 'shufang-xiaoji-v1-12';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -34,7 +34,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if (res && res.status === 200 && res.type === 'basic') {
           const copy = res.clone();
