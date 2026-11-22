@@ -259,15 +259,26 @@
     });
   }
 
+  function isLocalDevProxy() {
+    try {
+      const h = window.location && window.location.hostname;
+      return h === 'localhost' || h === '127.0.0.1';
+    } catch { return false; }
+  }
+
   async function requestJson(url, opts = {}) {
     if (bridge.available && opts.useBridge !== false) {
       const text = await bridgeRequest(url, opts);
       return JSON.parse(text);
     }
+    let targetUrl = url;
+    if (!bridge.available && isLocalDevProxy() && opts.viaProxy) {
+      targetUrl = `/api/fetch?url=${encodeURIComponent(url)}`;
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), opts.timeout || 25000);
     try {
-      const res = await fetch(url, {
+      const res = await fetch(targetUrl, {
         method: opts.method || 'GET',
         headers: opts.headers || {},
         body: opts.body || undefined,
@@ -1560,6 +1571,7 @@
       }
     }).catch(() => {});
 
+    const canFullWeb = bridge.available || isLocalDevProxy();
     const tasks = [];
     if (isbn) {
       tasks.push(
@@ -1567,15 +1579,16 @@
         handleSource(fetchOpenLibrary(`isbn:${isbn}`)),
         handleSource(fetchAppleBooks(isbn)),
       );
-      if (bridge.available) {
+      if (canFullWeb) {
         tasks.push(handleSource(fetchDoubanBooks(isbn)), handleSource(fetchWeReadBooks(isbn)));
       }
     } else if (isCJK) {
-      if (bridge.available) {
-        // 原生 App 内直连中文全网源（微信读书 + 豆瓣多版本）与国际源并行
+      if (canFullWeb) {
+        // 原生 App（URLSession）与本地代理预览：直连中文全网源（微信读书 + 豆瓣多版本 + 百度百科）
         tasks.push(
           handleSource(fetchWeReadBooks(q)),
           handleSource(fetchDoubanBooks(q)),
+          handleSource(fetchBaiduBaike(q)),
         );
       }
       tasks.push(
@@ -1589,8 +1602,12 @@
         handleSource(fetchGoogleBooks(q)),
         handleSource(fetchAppleBooks(q)),
       );
-      if (bridge.available) {
-        tasks.push(handleSource(fetchDoubanBooks(q)), handleSource(fetchWeReadBooks(q)));
+      if (canFullWeb) {
+        tasks.push(
+          handleSource(fetchDoubanBooks(q)),
+          handleSource(fetchWeReadBooks(q)),
+          handleSource(fetchBaiduBaike(q)),
+        );
       }
     }
 
@@ -1815,7 +1832,7 @@
   }
 
   async function fetchWeReadBooks(q, timeout = 5500) {
-    const data = await requestJson(`https://weread.qq.com/web/search/global?keyword=${encodeURIComponent(q)}&maxIdx=0&count=12`, { timeout });
+    const data = await requestJson(`https://weread.qq.com/web/search/global?keyword=${encodeURIComponent(q)}&maxIdx=0&count=12`, { timeout, viaProxy: true });
     const list = (data.books || []).map((entry) => {
       const i = entry.bookInfo || {};
       const title = i.title || '';
@@ -1843,7 +1860,7 @@
   }
 
   async function fetchDoubanBooks(q, timeout = 5500) {
-    const data = await requestJson(`https://book.douban.com/j/subject_suggest?q=${encodeURIComponent(q)}`, { timeout });
+    const data = await requestJson(`https://book.douban.com/j/subject_suggest?q=${encodeURIComponent(q)}`, { timeout, viaProxy: true });
     const arr = Array.isArray(data) ? data : [];
     const list = arr.filter((d) => d && d.title && (!d.type || d.type === 'b')).slice(0, 12).map((d) => {
       const title = d.title || '';
@@ -1864,6 +1881,71 @@
       };
     });
     return { list, source: list.length ? '豆瓣读书' : '' };
+  }
+
+  function parseChineseWordsWan(rawText) {
+    const s = String(rawText || '').replace(/,/g, '').trim();
+    if (!s) return 0;
+    const wanM = s.match(/([\d.]+)\s*万/);
+    if (wanM) return +Number(wanM[1]).toFixed(1);
+    const qianM = s.match(/([\d.]+)\s*千/);
+    if (qianM) return +(Number(qianM[1]) / 10).toFixed(1);
+    const numM = s.match(/([\d.]+)/);
+    if (numM) {
+      const n = Number(numM[1]);
+      if (n >= 1000) return +(n / 10000).toFixed(1);
+    }
+    return 0;
+  }
+
+  async function fetchBaiduBaike(q, timeout = 5500) {
+    const cleanQ = String(q || '').replace(/[《》]/g, '').trim();
+    if (!cleanQ) return { list: [], source: '' };
+    const data = await requestJson(`https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=${encodeURIComponent(cleanQ)}&bk_length=600`, { timeout, viaProxy: true });
+    if (!data || !data.title) return { list: [], source: '' };
+    const cards = Array.isArray(data.card) ? data.card : [];
+    const getCard = (...names) => {
+      for (const c of cards) {
+        const n = String(c.name || '').trim();
+        if (names.some((k) => n.includes(k))) {
+          const v = Array.isArray(c.value) ? c.value.map((x) => stripHtml(String(x))).join(' / ') : stripHtml(String(c.value || ''));
+          if (v) return v;
+        }
+      }
+      return '';
+    };
+    const desc = stripHtml(data.desc || '');
+    const summary = stripHtml(data.abstract || desc || '');
+    const author = getCard('作者', '著者', '原著');
+    const publisher = getCard('出版社', '出版机构');
+    const translator = getCard('译者');
+    const rawWords = getCard('字数');
+    const rawPages = getCard('页数');
+    const rawYear = getCard('出版时间', '首版时间', '发行时间');
+    const rawType = getCard('文学体裁', '作品类型', '题材', '类别');
+    const isBookLike = Boolean(author || publisher || rawWords || rawPages || /(小说|书籍|著作|散文|诗集|随笔|传记|长篇|中篇|短篇|文学|出版|丛书|读物|纪实)/.test(`${desc} ${summary} ${rawType}`));
+    if (!isBookLike) return { list: [], source: '' };
+    const wordsWan = parseChineseWordsWan(rawWords);
+    const pagesMatch = rawPages.match(/(\d+)/);
+    const pages = pagesMatch ? Number(pagesMatch[1]) : (wordsWan ? Math.round(wordsWan / 0.065) : 0);
+    const yearMatch = rawYear.match(/(19|20)\d{2}/);
+    const title = stripHtml(data.title || cleanQ);
+    const coverUrl = data.image ? String(data.image).replace(/^http:/, 'https:') : '';
+    return {
+      list: [{
+        title,
+        author: author || '佚名',
+        translator,
+        publisher,
+        year: yearMatch ? yearMatch[0] : '',
+        genre: mapGenre(rawType, { title, author, summary }),
+        pages,
+        wordsWan,
+        summary: summary.length > 260 ? `${summary.slice(0, 260)}…` : summary,
+        coverUrl,
+      }],
+      source: '百度百科',
+    };
   }
 
   async function fetchAppleBooks(q, timeout = 5500) {
