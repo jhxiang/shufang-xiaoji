@@ -1,78 +1,71 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
-    <linearGradient id="bgGrad" x1="0.1" y1="0" x2="0.9" y2="1">
-      <stop offset="0%" stop-color="#357A62"/>
-      <stop offset="52%" stop-color="#225745"/>
-      <stop offset="100%" stop-color="#14372B"/>
+    <linearGradient id="lightBg" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0%" stop-color="#FDFCF9"/>
+      <stop offset="55%" stop-color="#F6F2EA"/>
+      <stop offset="100%" stop-color="#ECE5D8"/>
     </linearGradient>
-    <radialGradient id="glowTop" cx="0.28" cy="0.22" r="0.65">
-      <stop offset="0%" stop-color="#8FE3C2" stop-opacity="0.22"/>
-      <stop offset="100%" stop-color="#8FE3C2" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="creamGrad" x1="0" y1="0" x2="0.2" y2="1">
-      <stop offset="0%" stop-color="#FFFDF8"/>
-      <stop offset="100%" stop-color="#EFE7DA"/>
+    <linearGradient id="eleGreen" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0%" stop-color="#35725C"/>
+      <stop offset="100%" stop-color="#1F4D3D"/>
     </linearGradient>
-    <linearGradient id="earGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#E7DDD0"/>
-      <stop offset="100%" stop-color="#D4C6B3"/>
+    <linearGradient id="earSoft" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#518F78"/>
+      <stop offset="100%" stop-color="#366E5A"/>
     </linearGradient>
-    <linearGradient id="ribbonGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#F2A462"/>
-      <stop offset="100%" stop-color="#D26D36"/>
+    <linearGradient id="bookBase" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F3EDE2"/>
     </linearGradient>
-    <filter id="softShadow" x="-15%" y="-15%" width="130%" height="135%">
-      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#0B221A" flood-opacity="0.34"/>
+    <linearGradient id="ribbonAmber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#EB9557"/>
+      <stop offset="100%" stop-color="#CF6D36"/>
+    </linearGradient>
+    <filter id="gentleShadow" x="-15%" y="-15%" width="130%" height="135%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#22382F" flood-opacity="0.12"/>
     </filter>
   </defs>
 
-  <!-- Full-bleed App Background (iOS masks corners automatically) -->
-  <rect width="1024" height="1024" fill="url(#bgGrad)"/>
-  <rect width="1024" height="1024" fill="url(#glowTop)"/>
-  <circle cx="835" cy="195" r="220" fill="#FFFFFF" opacity="0.05"/>
-  <circle cx="195" cy="845" r="210" fill="#F2A462" opacity="0.09"/>
+  <!-- Full-bleed Light Warm-Paper Background for iOS AppIcon -->
+  <rect width="1024" height="1024" fill="url(#lightBg)"/>
+  <circle cx="810" cy="210" r="240" fill="#FFFFFF" opacity="0.65"/>
+  <circle cx="200" cy="840" r="210" fill="#E3D6C3" opacity="0.28"/>
 
-  <!-- Main Emblem: Minimalist Elephant resting on an Open Book with Bookmark Trail -->
-  <g filter="url(#softShadow)">
-    <path d="M188 648 C275 612, 412 612, 512 664 C612 612, 749 612, 836 648
-             L814 754 C732 722, 608 724, 512 772 C416 724, 292 722, 210 754 Z"
-          fill="#DFD4C4"/>
-    <path d="M198 624 C284 588, 416 590, 512 642 C608 590, 740 588, 826 624
-             L806 726 C726 694, 606 696, 512 744 C418 696, 298 694, 218 726 Z"
-          fill="url(#creamGrad)"/>
-    <path d="M512 642 L512 744" stroke="#C5B6A2" stroke-width="6" stroke-linecap="round"/>
+  <g filter="url(#gentleShadow)">
+    <path d="M206 646 C290 614, 418 616, 512 664 C606 616, 734 614, 818 646
+             L798 742 C720 712, 604 714, 512 758 C420 714, 304 712, 226 742 Z"
+          fill="url(#bookBase)" stroke="#D9CEBD" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M512 664 L512 756" stroke="#D3C6B3" stroke-width="6" stroke-linecap="round"/>
 
-    <path d="M538 724 L594 708 L594 846 L566 820 L538 846 Z" fill="url(#ribbonGrad)"/>
+    <path d="M542 730 L592 716 L592 842 L567 818 L542 842 Z" fill="url(#ribbonAmber)"/>
 
-    <path d="M312 606
-             C292 544, 296 440, 354 366
-             C402 304, 484 274, 562 292
-             C634 308, 676 364, 682 434
-             C686 482, 712 510, 744 504
-             C768 500, 780 478, 774 456
-             C770 442, 756 436, 748 446
-             C736 416, 768 386, 798 402
-             C836 422, 842 478, 816 520
-             C786 568, 718 584, 660 554
-             C634 540, 622 572, 620 606
-             C566 592, 534 606, 512 622
-             C474 600, 386 594, 312 606 Z"
-          fill="url(#creamGrad)"/>
+    <path d="M324 610
+             C304 548, 308 446, 364 374
+             C410 314, 488 286, 562 302
+             C630 318, 672 372, 678 440
+             C682 486, 706 512, 738 506
+             C760 502, 772 482, 766 462
+             C762 448, 748 444, 742 452
+             C730 424, 760 396, 790 410
+             C826 428, 832 482, 808 522
+             C778 568, 714 584, 658 556
+             C632 544, 622 574, 620 608
+             C568 596, 536 608, 512 624
+             C476 604, 394 598, 324 610 Z"
+          fill="url(#eleGreen)"/>
 
-    <path d="M448 338
-             C382 340, 344 402, 354 472
-             C362 528, 412 558, 466 544
-             C506 534, 526 486, 520 426
-             C514 368, 488 336, 448 338 Z"
-          fill="url(#earGrad)"/>
-    <path d="M402 406 C428 400, 456 410, 474 428" fill="none" stroke="#FFFDF8" stroke-width="10" stroke-linecap="round" opacity="0.72"/>
-    <path d="M398 452 C424 448, 450 456, 466 472" fill="none" stroke="#FFFDF8" stroke-width="9" stroke-linecap="round" opacity="0.55"/>
+    <path d="M452 348
+             C388 350, 352 410, 362 476
+             C370 530, 418 558, 468 544
+             C506 534, 526 488, 520 432
+             C514 376, 490 346, 452 348 Z"
+          fill="url(#earSoft)"/>
+    <path d="M408 414 C432 408, 458 418, 474 434" fill="none" stroke="#F8F5EE" stroke-width="9" stroke-linecap="round" opacity="0.82"/>
+    <path d="M404 456 C428 452, 452 460, 468 474" fill="none" stroke="#F8F5EE" stroke-width="8" stroke-linecap="round" opacity="0.62"/>
 
-    <circle cx="600" cy="404" r="15" fill="#1E4E3D"/>
-    <circle cx="605" cy="399" r="5" fill="#FFFDF8"/>
-    <ellipse cx="566" cy="442" rx="18" ry="11" fill="#E99A6B" opacity="0.32"/>
+    <circle cx="598" cy="412" r="14" fill="#FCFBF8"/>
+    <circle cx="601" cy="410" r="6" fill="#173A2E"/>
 
-    <path d="M778 268 L788 296 L816 306 L788 316 L778 344 L768 316 L740 306 L768 296 Z" fill="#F6BD7A"/>
-    <circle cx="718" cy="264" r="10" fill="#F6BD7A" opacity="0.8"/>
+    <path d="M772 282 L781 308 L807 317 L781 326 L772 352 L763 326 L737 317 L763 308 Z" fill="#E38B4F"/>
   </g>
 </svg>

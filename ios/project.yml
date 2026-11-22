@@ -35,6 +35,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.shufang.xiaoji
         INFOPLIST_FILE: ShufangXiaoji/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: "小象阅痕"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
         SUPPORTS_MACCATALYST: "NO"
@@ -42,5 +43,3 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
         GENERATE_INFOPLIST_FILE: "NO"
         ALWAYS_SEARCH_USER_PATHS: "NO"
-    info:
-      path: ShufangXiaoji/Info.plist

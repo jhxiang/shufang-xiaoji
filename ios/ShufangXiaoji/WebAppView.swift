@@ -77,6 +77,28 @@ final class WebAppViewController: UIViewController {
         return dark ? .lightContent : .darkContent
     }
 
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        syncSafeAreaToWeb()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        syncSafeAreaToWeb()
+    }
+
+    /// 把原生真实安全区高度同步给 CSS 变量（双保险适配灵动岛/刘海屏与底部 Home Indicator）
+    private func syncSafeAreaToWeb() {
+        guard webView != nil else { return }
+        let top = Int(ceil(view.safeAreaInsets.top))
+        let bottom = Int(ceil(view.safeAreaInsets.bottom))
+        let js = """
+        document.documentElement.style.setProperty('--safe-top', '\(top)px');
+        document.documentElement.style.setProperty('--safe-bottom', '\(bottom)px');
+        """
+        runJS(js)
+    }
+
     // MARK: - WebView Setup
 
     private func configureWebView() {
@@ -377,8 +399,9 @@ extension WebAppViewController: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // 注入原生标记，让 Web 端隐藏 Safari 安装指引等
+        // 注入原生标记，让 Web 端隐藏 Safari 安装指引并同步真实安全区
         runJS("window.__shufangNativeApp = true; document.documentElement.classList.add('native-shell');")
+        syncSafeAreaToWeb()
     }
 
     // 允许 JS alert / confirm（调试期友好）
