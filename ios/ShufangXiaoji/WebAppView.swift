@@ -67,9 +67,27 @@ final class WebAppViewController: UIViewController {
         NotificationCenter.default.removeObserver(self)
     }
 
-    /// App 进入后台/终止前，主动让 Web 端把内存数据落盘到原生快照。
+    /// App 进入后台/终止前，申请后台任务时间并主动让 Web 端把内存数据落盘到原生快照。
     @objc private func persistBeforeBackground() {
-        runJS("window.__shufangFlush && window.__shufangFlush();")
+        var bgTask: UIBackgroundTaskIdentifier = .invalid
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "ShufangFlushSnapshot") {
+            if bgTask != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTask)
+                bgTask = .invalid
+            }
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.webView != nil else {
+                if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask) }
+                return
+            }
+            self.webView.evaluateJavaScript("window.__shufangFlush && window.__shufangFlush();") { _, _ in
+                if bgTask != .invalid {
+                    UIApplication.shared.endBackgroundTask(bgTask)
+                    bgTask = .invalid
+                }
+            }
+        }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -141,16 +159,12 @@ final class WebAppViewController: UIViewController {
         self.webView = webView
     }
 
-    /// 让页面适配安全区：把 iOS 安全区高度传给 CSS 变量。
+    /// 让页面适配安全区：把 iOS 安全区高度与磁盘快照注入到页面启动环境。
     private func makeViewportScript() -> WKUserScript {
-        // 注入磁盘快照（若有），页面启动时可同步读到，无需等待异步桥接
-        var snapshotScript = "window.__shufangSnapshot = null;"
-        if let snapshot = PersistentStore.shared.loadSnapshot(),
-           !snapshot.isEmpty,
-           let data = try? JSONSerialization.data(withJSONObject: [snapshot], options: []),
-           let json = String(data: data, encoding: .utf8) {
-            // json 形如 ["..."]，取内层即为合法 JS 字符串字面量
-            snapshotScript = "window.__shufangSnapshot = \(String(json.dropFirst().dropLast()));"
+        // 使用 Base64 注入磁盘快照，100% 避免简介/笔记中的特殊字符或 \u2028 导致 JS 语法错误
+        var snapshotScript = "window.__shufangSnapshotB64 = null; window.__shufangSnapshot = null;"
+        if let b64 = PersistentStore.shared.loadSnapshotBase64(), !b64.isEmpty {
+            snapshotScript = "window.__shufangSnapshotB64 = \"\(b64)\"; window.__shufangSnapshot = null;"
         }
 
         let js = """
@@ -402,6 +416,10 @@ extension WebAppViewController: WKNavigationDelegate, WKUIDelegate {
         // 注入原生标记，让 Web 端隐藏 Safari 安装指引并同步真实安全区
         runJS("window.__shufangNativeApp = true; document.documentElement.classList.add('native-shell');")
         syncSafeAreaToWeb()
+        // 兜底：若页面未能从 documentStart 脚本水合（且磁盘确有快照），再次注入恢复
+        if let b64 = PersistentStore.shared.loadSnapshotBase64(), !b64.isEmpty {
+            runJS("if (window.ShufangNative && !window.__shufangHydrated && typeof ShufangNative.hydrateBase64 === 'function') { ShufangNative.hydrateBase64(\"\(b64)\"); }")
+        }
     }
 
     // 允许 JS alert / confirm（调试期友好）

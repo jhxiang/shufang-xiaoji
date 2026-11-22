@@ -164,13 +164,41 @@
   function memClear(store) { memWrite(store, []); }
 
   /* ---- 原生磁盘快照 ---- */
+  let stateReadyForSnapshot = false;
+
+  function decodeBase64Utf8(b64) {
+    if (!b64 || typeof b64 !== 'string') return null;
+    try {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new TextDecoder('utf-8').decode(bytes);
+    } catch {
+      try {
+        return decodeURIComponent(escape(atob(b64)));
+      } catch {
+        return null;
+      }
+    }
+  }
+
   function snapshotPayload() {
+    // 优先使用权威的 state，避免 memCache 与 state 脱节导致空快照覆盖
+    const books = stateReadyForSnapshot && Array.isArray(state.books)
+      ? state.books
+      : (memCache.books || memAll('books'));
+    const sessions = stateReadyForSnapshot && Array.isArray(state.sessions)
+      ? state.sessions
+      : (memCache.sessions || memAll('sessions'));
+    const metaArr = stateReadyForSnapshot && state.meta && typeof state.meta === 'object'
+      ? Object.keys(state.meta).map((key) => ({ key, value: state.meta[key] }))
+      : (memCache.meta || memAll('meta'));
     return JSON.stringify({
       version: DB_VER,
       savedAt: Date.now(),
-      books: memCache.books || memAll('books'),
-      sessions: memCache.sessions || memAll('sessions'),
-      meta: memCache.meta || memAll('meta'),
+      books,
+      sessions,
+      meta: metaArr,
       kv: memCache.kv || { timer: null },
     });
   }
@@ -179,12 +207,16 @@
     clearTimeout(nativeSaveTimer);
     nativeSaveTimer = setTimeout(() => {
       try { bridge.post({ type: 'saveSnapshot', data: snapshotPayload() }); } catch { /* ignore */ }
-    }, 320);
+    }, 120);
   }
 
   function flushNativeSave() {
+    if (!bridge.available) return;
     clearTimeout(nativeSaveTimer);
-    try { bridge.post({ type: 'saveSnapshot', data: snapshotPayload() }); } catch { /* ignore */ }
+    try {
+      const payload = snapshotPayload();
+      bridge.post({ type: 'saveSnapshot', data: payload });
+    } catch { /* ignore */ }
   }
 
   /** 原生端在页面加载后回调，把磁盘快照交还 Web 端 */
@@ -196,6 +228,7 @@
     memCache.sessions = Array.isArray(data.sessions) ? data.sessions : [];
     memCache.meta = Array.isArray(data.meta) ? data.meta : [];
     memCache.kv = data.kv && typeof data.kv === 'object' ? data.kv : { timer: null, theme: null };
+    window.__shufangHydrated = true;
     return true;
   }
 
@@ -303,11 +336,17 @@
         state.sessions = memCache.sessions || [];
         state.meta = {};
         (memCache.meta || []).forEach((r) => { state.meta[r.key] = r.value; });
+        stateReadyForSnapshot = true;
         applyTheme();
         renderAll();
         restoreTimer();
       }
       return ok;
+    },
+    hydrateBase64(b64) {
+      const json = decodeBase64Utf8(b64);
+      if (json) return this.hydrate(json);
+      return false;
     },
     onFetchResult(requestId, ok, body) {
       const item = pendingRequests.get(requestId);
@@ -421,6 +460,7 @@
       const i = arr.findIndex((r) => r.key === key);
       if (i >= 0) arr[i] = { key, value }; else arr.push({ key, value });
       memWrite('meta', arr);
+      flushNativeSave();
       return;
     }
     await dbPut('meta', { key, value });
@@ -464,6 +504,7 @@
     const i = state.books.findIndex((b) => b.id === book.id);
     if (i >= 0) state.books[i] = book; else state.books.push(book);
     await dbPut('books', book);
+    flushNativeSave();
     if (!silent) { renderShelf(); renderStats(); renderSettings(); }
   }
 
@@ -475,16 +516,19 @@
     }
     state.sessions = keep;
     await dbDel('books', id);
+    flushNativeSave();
     renderShelf(); renderStats(); renderSettings();
   }
 
   async function addSession(session) {
     state.sessions.push(session);
     await dbPut('sessions', session);
+    flushNativeSave();
   }
   async function removeSession(id) {
     state.sessions = state.sessions.filter((s) => s.id !== id);
     await dbDel('sessions', id);
+    flushNativeSave();
     renderStats();
   }
   const sessionsOf = (bookId) => state.sessions.filter((s) => s.bookId === bookId);
@@ -3998,6 +4042,7 @@
       }
       if (data.meta.theme) applyTheme();
     }
+    flushNativeSave();
     renderShelf(); renderDaily(); renderStats(); renderSettings();
     toast(`恢复完成：新增 ${added} 本，合并 ${merged} 本，阅读记录 +${sAdded}`);
   }
@@ -4287,11 +4332,16 @@ ${libraryDigest() || '（暂无）'}
   }
 
   async function init() {
-    // 原生 App：磁盘快照由原生端在 documentStart 注入，避免自定义 scheme 下
-    // IndexedDB / localStorage 不可持久化导致数据丢失。
+    // 原生 App：磁盘快照由原生端在 documentStart 以 Base64 注入，避免自定义 scheme 下
+    // IndexedDB / localStorage 不可持久化或特殊字符转义导致数据丢失。
     if (bridge.available) {
       try {
-        if (window.__shufangSnapshot) hydrateFromNative(window.__shufangSnapshot);
+        if (window.__shufangSnapshotB64) {
+          const decoded = decodeBase64Utf8(window.__shufangSnapshotB64);
+          if (decoded) hydrateFromNative(decoded);
+        } else if (window.__shufangSnapshot) {
+          hydrateFromNative(window.__shufangSnapshot);
+        }
       } catch { /* ignore */ }
     }
 
@@ -4310,6 +4360,7 @@ ${libraryDigest() || '（暂无）'}
         memAll('meta').forEach((r) => { state.meta[r.key] = r.value; });
       }
     }
+    stateReadyForSnapshot = true;
 
     applyTheme();
     try { await purgeLegacyDemoBooks(); } catch { /* ignore */ }
