@@ -364,6 +364,7 @@
     tab: 'shelf',
     statusFilter: 'all',
     groupMode: 'genre',
+    viewMode: kvGet('shelfView', 'spine'),
     chipFilter: 'all',
     sort: 'recent',
     search: '',
@@ -381,6 +382,9 @@
     dailyOffset: 0,
     dailyQuotes: [],
     recommendations: [],
+    onlineRecs: [],
+    onlineRecKey: '',
+    onlineRecLoading: false,
     noteBookId: null,
     noteType: 'reflection',
     noteImage: null,
@@ -672,23 +676,170 @@
     stage.innerHTML = ordered.map(([key, books]) => shelfTierHtml(key, books, `${books.length} 本`)).join('');
   }
 
+  function extractCoverColor(url) {
+    return new Promise((resolve) => {
+      if (!url) { resolve(null); return; }
+      const img = new Image();
+      if (!String(url).startsWith('data:')) img.crossOrigin = 'anonymous';
+      const timer = setTimeout(() => resolve(null), 3500);
+      img.onload = () => {
+        clearTimeout(timer);
+        try {
+          const c = document.createElement('canvas');
+          const size = 24;
+          c.width = size; c.height = size;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, size, size);
+          const data = ctx.getImageData(0, 0, size, size).data;
+          let rSum = 0, gSum = 0, bSum = 0, wSum = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            if (data[i + 3] < 160) continue;
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            const max = Math.max(r, g, b), min = Math.min(r, g, b);
+            const sat = max ? (max - min) / max : 0;
+            const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+            // 优先采样有色彩且不过白/过黑的区域
+            const weight = (lum > 0.08 && lum < 0.9) ? (0.4 + sat * 2.4) : 0.08;
+            rSum += r * weight; gSum += g * weight; bSum += b * weight; wSum += weight;
+          }
+          if (wSum <= 0) { resolve(null); return; }
+          let r = rSum / wSum / 255, g = gSum / wSum / 255, b = bSum / wSum / 255;
+          const max = Math.max(r, g, b), min = Math.min(r, g, b);
+          let h = 0, s = 0, l = (max + min) / 2;
+          if (max !== min) {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+            else if (max === g) h = (b - r) / d + 2;
+            else h = (r - g) / d + 4;
+            h /= 6;
+          }
+          // 校正为沉稳纸感书脊色调，确保浅色文字可读
+          s = clamp(s, 0.22, 0.58);
+          l = clamp(l, 0.24, 0.40);
+          const hue2rgb = (p, q, t) => {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1 / 6) return p + (q - p) * 6 * t;
+            if (t < 1 / 2) return q;
+            if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+            return p;
+          };
+          const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+          const p = 2 * l - q;
+          const rr = Math.round(hue2rgb(p, q, h + 1 / 3) * 255);
+          const gg = Math.round(hue2rgb(p, q, h) * 255);
+          const bb = Math.round(hue2rgb(p, q, h - 1 / 3) * 255);
+          const hex = `#${[rr, gg, bb].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+          resolve(hex);
+        } catch {
+          resolve(null);
+        }
+      };
+      img.onerror = () => { clearTimeout(timer); resolve(null); };
+      img.src = url;
+    });
+  }
+
+  function syncBookColorFromCover(book) {
+    if (!book || !book.coverUrl) return;
+    extractCoverColor(book.coverUrl).then((hex) => {
+      if (!hex || hex === book.spineColor) return;
+      const latest = getBook(book.id);
+      if (!latest) return;
+      latest.spineColor = hex;
+      saveBook(latest, true).then(() => {
+        if (state.tab === 'shelf') renderShelf();
+      });
+    });
+  }
+
   function shelfTierHtml(label, books, right) {
+    const mode = state.viewMode || 'spine';
+    const selected = state.selectedBookId && books.some((b) => b.id === state.selectedBookId)
+      ? books.find((b) => b.id === state.selectedBookId) : null;
+
+    if (mode === 'list') {
+      const rows = books.map((b) => {
+        const tags = [
+          `<span class="mini-tag primary">${esc(b.genre)}</span>`,
+          `<span class="mini-tag">${STATUS_LABELS[b.status]}</span>`,
+          b.pages ? `<span class="mini-tag">${b.pages} 页</span>` : '',
+          b.rating ? `<span class="mini-tag gold">★ ${starValueText(b.rating)}</span>` : '',
+        ].filter(Boolean).join('');
+        return `<div class="book-list-row" data-open-detail="${esc(b.id)}">
+          <div class="physical-book book-list-cover" style="--spine-bg:${esc(b.spineColor)}">
+            ${typoCover(b)}
+            ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+          </div>
+          <div class="book-list-body">
+            <div class="book-list-head">
+              <div class="book-list-title">${esc(b.title)}</div>
+            </div>
+            <div class="book-list-author">${esc(b.author)}</div>
+            <div class="book-list-tags">${tags}</div>
+            <div class="book-list-prog">
+              <div class="progress-track"><div class="progress-fill" style="width:${clamp(b.progress, 0, 100)}%"></div></div>
+              <span class="book-list-prog-text">${Math.round(b.progress)}%</span>
+            </div>
+          </div>
+          <div class="book-list-actions">
+            <button type="button" class="book-list-btn primary" data-act="timer" data-id="${esc(b.id)}">⏱ 计时</button>
+            <button type="button" class="book-list-btn" data-act="note" data-id="${esc(b.id)}">✍️ 笔记</button>
+          </div>
+        </div>`;
+      }).join('');
+      return `<div class="shelf-tier">
+        <div class="shelf-group-label"><span>${esc(label)}</span><span class="shelf-group-count">${esc(right)}</span></div>
+        <div class="shelf-list-stack">${rows}</div>
+      </div>`;
+    }
+
+    if (mode === 'cover') {
+      const cards = books.map((b) => {
+        const sel = state.selectedBookId === b.id ? ' selected' : '';
+        const statusCls = b.status === 'finished' ? 'finished' : (b.status === 'reading' ? 'reading' : '');
+        const subText = b.rating ? `${b.author} · ★${starValueText(b.rating)}` : b.author;
+        return `<button type="button" class="cover-book-item${sel}" data-cover-id="${esc(b.id)}"
+          title="${esc(b.title)} · ${STATUS_LABELS[b.status]}">
+          <div class="physical-book" style="--spine-bg:${esc(b.spineColor)}">
+            ${typoCover(b)}
+            ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+            <span class="cover-badge-status ${statusCls}">${STATUS_LABELS[b.status]}</span>
+            <span class="cover-progress-strip"><span style="width:${clamp(b.progress, 0, 100)}%"></span></span>
+          </div>
+          <div class="cover-book-meta">
+            <div class="cover-book-title">${esc(b.title)}</div>
+            <div class="cover-book-sub">${esc(subText)}</div>
+          </div>
+        </button>`;
+      }).join('');
+      return `<div class="shelf-tier">
+        <div class="shelf-group-label"><span>${esc(label)}</span><span class="shelf-group-count">${esc(right)}</span></div>
+        <div class="shelf-cover-grid">${cards}</div>
+        <div class="shelf-ledge"></div>
+        ${selected ? expandedCardHtml(selected) : ''}
+      </div>`;
+    }
+
     const spines = books.map((b) => {
       const { w, h } = spineSize(b);
       const sel = state.selectedBookId === b.id ? ' selected' : '';
       const dot = b.status === 'finished' ? 'finished' : (b.status === 'reading' ? 'reading' : '');
-      return `<button type="button" class="book-spine${sel}" data-book-id="${esc(b.id)}"
+      const hasCover = b.coverUrl ? ' has-cover' : '';
+      const tint = b.coverUrl
+        ? `<span class="spine-cover-tint" style="background-image:url('${esc(b.coverUrl)}')"></span><span class="spine-scrim"></span>`
+        : '';
+      return `<button type="button" class="book-spine${sel}${hasCover}" data-book-id="${esc(b.id)}"
         title="${esc(b.title)} · ${STATUS_LABELS[b.status]}"
         style="--spine-w:${w}px;--spine-h:${h}px;--spine-bg:${esc(b.spineColor)}">
+        ${tint}
         <span class="spine-status-dot ${dot}"></span>
         <span class="spine-title">${esc(b.title)}</span>
         <span class="spine-author">${esc(b.author)}</span>
         <span class="spine-progress-bar"><span class="spine-progress-fill" style="width:${clamp(b.progress, 0, 100)}%"></span></span>
       </button>`;
     }).join('');
-
-    const selected = state.selectedBookId && books.some((b) => b.id === state.selectedBookId)
-      ? books.find((b) => b.id === state.selectedBookId) : null;
 
     return `<div class="shelf-tier">
       <div class="shelf-group-label"><span>${esc(label)}</span><span class="shelf-group-count">${esc(right)}</span></div>
@@ -783,6 +934,23 @@
       }
       const openBtn = e.target.closest('[data-open-detail]');
       if (openBtn) { openDetail(openBtn.dataset.openDetail); return; }
+      const coverItem = e.target.closest('.cover-book-item');
+      if (coverItem) {
+        const id = coverItem.dataset.coverId;
+        if (state.selectedBookId === id) {
+          openDetail(id);
+        } else {
+          state.selectedBookId = id;
+          renderShelf();
+          requestAnimationFrame(() => {
+            const wrap = $('.book-expanded-wrap');
+            if (wrap && wrap.getBoundingClientRect().bottom > window.innerHeight - 70) {
+              wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          });
+        }
+        return;
+      }
       const spine = e.target.closest('.book-spine');
       if (spine) {
         const id = spine.dataset.bookId;
@@ -830,6 +998,34 @@
       $$('#statusPills .status-pill').forEach((p) => p.classList.toggle('active', p === pill));
       renderShelf();
     });
+
+    const setViewMode = (mode) => {
+      if (!['spine', 'cover', 'list'].includes(mode)) mode = 'spine';
+      state.viewMode = mode;
+      kvSet('shelfView', mode);
+      $$('#shelfViewToggle .view-btn').forEach((btn) => btn.classList.toggle('active', btn.dataset.view === mode));
+      const hint = $('#shelfHintText');
+      if (hint) {
+        hint.textContent = mode === 'spine'
+          ? '轻点书脊展开封面 · 再点进入详情'
+          : mode === 'cover'
+            ? '轻点封面展开操作 · 再点进入详情'
+            : '轻点书目查看详情 · 右侧可快速计时';
+      }
+      renderShelf();
+    };
+    $('#shelfViewToggle')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-view]');
+      if (btn) setViewMode(btn.dataset.view);
+    });
+    // 初始化视图切换状态与提示文案
+    $$('#shelfViewToggle .view-btn').forEach((btn) => btn.classList.toggle('active', btn.dataset.view === state.viewMode));
+    const initHint = $('#shelfHintText');
+    if (initHint && state.viewMode !== 'spine') {
+      initHint.textContent = state.viewMode === 'cover'
+        ? '轻点封面展开操作 · 再点进入详情'
+        : '轻点书目查看详情 · 右侧可快速计时';
+    }
 
     const setGroup = (mode) => {
       state.groupMode = mode;
@@ -1066,6 +1262,12 @@
       $('#coverPreviewImg').classList.remove('hidden');
       $('#coverPlaceholderBox').classList.add('hidden');
       $('#removeCoverBtn').classList.remove('hidden');
+      extractCoverColor(data).then((hex) => {
+        if (hex) {
+          state.formColor = hex;
+          toast('已根据封面自动匹配书脊色调');
+        }
+      });
       e.target.value = '';
     });
     $('#removeCoverBtn')?.addEventListener('click', (e) => {
@@ -1140,6 +1342,7 @@
       });
       if (book.status === 'finished') book.progress = 100;
       await saveBook(book);
+      syncBookColorFromCover(book);
       toast('书籍信息已更新');
       closeSheet('addBookBackdrop');
       if (state.detailBookId) renderDetail();
@@ -1160,6 +1363,7 @@
     });
     if (book.status === 'finished') book.progress = 100;
     await saveBook(book);
+    syncBookColorFromCover(book);
     closeSheet('addBookBackdrop');
     state.selectedBookId = book.id;
     renderShelf();
@@ -1185,6 +1389,7 @@
       updatedAt: Date.now(),
     });
     await saveBook(book);
+    syncBookColorFromCover(book);
     toast(`《${book.title}》已加入想读`);
     renderDaily();
   }
@@ -1279,9 +1484,12 @@
 
     if (state.searchSeq !== searchToken) return;
 
-    // 两个主源都没有在线结果时，再回落 Open Library
-    if (!onlineList.length) {
-      await handleSource(fetchOpenLibrary(q));
+    // 两个主源结果偏少时，补充 Open Library（支持 mode=everything）与开源 Gutendex 公版书库
+    if (onlineList.length < 4) {
+      await Promise.all([
+        handleSource(fetchOpenLibrary(q)),
+        handleSource(fetchGutendex(q)),
+      ]);
     }
 
     applyMerged(true);
@@ -1379,7 +1587,7 @@
   }
 
   async function fetchOpenLibrary(q, timeout = 4500) {
-    const data = await requestJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&limit=10&fields=title,author_name,number_of_pages_median,first_sentence,cover_i,subject`, { timeout });
+    const data = await requestJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&mode=everything&limit=10&fields=title,author_name,number_of_pages_median,first_sentence,cover_i,subject`, { timeout });
     const list = (data.docs || []).map((d) => {
       const pages = num(d.number_of_pages_median, 0);
       return {
@@ -1393,6 +1601,25 @@
       };
     }).filter((x) => x.title);
     return { list, source: list.length ? 'Open Library' : '' };
+  }
+
+  async function fetchGutendex(q, timeout = 5000) {
+    const data = await requestJson(`https://gutendex.com/books/?search=${encodeURIComponent(q)}`, { timeout });
+    const list = (data.results || []).slice(0, 8).map((d) => {
+      const authors = (d.authors || []).map((a) => a.name).filter(Boolean).slice(0, 2).join(' / ') || '佚名';
+      const subjects = [...(d.subjects || []), ...(d.bookshelves || [])].slice(0, 4).join(' · ');
+      const coverUrl = (d.formats && d.formats['image/jpeg']) ? d.formats['image/jpeg'] : '';
+      return {
+        title: d.title || '',
+        author: authors,
+        genre: mapGenre(subjects),
+        pages: 0,
+        wordsWan: 0,
+        summary: subjects ? `Project Gutenberg 开源公版名著 · 主题：${subjects}` : 'Project Gutenberg 开源公版名著',
+        coverUrl,
+      };
+    }).filter((x) => x.title);
+    return { list, source: list.length ? 'Gutendex 公版库' : '' };
   }
 
   /* =============================== 书籍详情 =============================== */
@@ -2436,36 +2663,68 @@
     renderRecommendations();
   }
 
-  function computeRecommendations() {
-    const owned = new Set(state.books.map((b) => `${b.title}|${b.author}`));
-    const ownedTitles = new Set(state.books.map((b) => b.title));
+  function computeUserTaste() {
+    const bookMins = new Map();
+    (state.sessions || []).forEach((s) => {
+      if (!s.bookId) return;
+      bookMins.set(s.bookId, (bookMins.get(s.bookId) || 0) + (num(s.durationSec, 0) / 60));
+    });
     const genreScore = new Map();
     const authorScore = new Map();
+    const recentCutoff = Date.now() - 14 * 86400 * 1000;
     state.books.forEach((b) => {
-      const w = (b.status === 'finished' ? 2.2 : 1) + (b.rating || 0) / 2.5;
+      const statusW = b.status === 'finished' ? 2.2 : (b.status === 'reading' ? 1.5 : 0.9);
+      const ratingW = (b.rating || 0) * 0.55;
+      const timeW = Math.min(2.5, (bookMins.get(b.id) || 0) / 90);
+      const recentW = (b.lastReadAt && b.lastReadAt >= recentCutoff) ? 0.6 : 0;
+      const w = statusW + ratingW + timeW + recentW;
       genreScore.set(b.genre, (genreScore.get(b.genre) || 0) + w);
-      authorScore.set(b.author, (authorScore.get(b.author) || 0) + w * 0.8);
+      if (b.author && b.author !== '佚名') {
+        authorScore.set(b.author, (authorScore.get(b.author) || 0) + w * 0.85);
+      }
     });
-    const finishedGenres = new Set(state.books.filter((b) => b.status === 'finished').map((b) => b.genre));
-    const top = topGenres(1)[0];
+    const sortedGenres = [...genreScore.entries()].sort((a, b) => b[1] - a[1]);
+    const sortedAuthors = [...authorScore.entries()].sort((a, b) => b[1] - a[1]);
+    return { genreScore, authorScore, sortedGenres, sortedAuthors };
+  }
 
-    const candidates = (window.CURATED_BOOKS || [])
-      .filter((b) => !owned.has(`${b.title}|${b.author}`) && !ownedTitles.has(b.title))
-      .map((b) => {
-        let score = (genreScore.get(b.genre) || 0) * 1.4 + (authorScore.get(b.author) || 0);
-        if (finishedGenres.has(b.genre)) score += 1.2;
-        if (!state.books.length) score += (b.wordsWan < 25 ? 1.6 : 0);
-        score += hashStr(b.title) * 0.8;
-        let reason = '';
-        if (top && b.genre === top) reason = `延续你在「${b.genre}」上的口味`;
+  function computeRecommendations() {
+    const owned = new Set(state.books.map((b) => `${b.title}|${b.author}`.toLowerCase()));
+    const ownedTitles = new Set(state.books.map((b) => b.title.toLowerCase()));
+    const { genreScore, authorScore, sortedGenres, sortedAuthors } = computeUserTaste();
+    const finishedGenres = new Set(state.books.filter((b) => b.status === 'finished').map((b) => b.genre));
+    const topGenre = sortedGenres[0]?.[0] || '';
+    const topAuthor = sortedAuthors[0]?.[0] || '';
+
+    // 合并内置精选书库 + 联网动态候选池，并去重过滤已录入书籍
+    const poolMap = new Map();
+    [...(window.CURATED_BOOKS || []), ...(state.onlineRecs || [])].forEach((b) => {
+      if (!b || !b.title) return;
+      const tk = b.title.toLowerCase();
+      if (ownedTitles.has(tk) || owned.has(`${b.title}|${b.author}`.toLowerCase())) return;
+      if (!poolMap.has(tk)) poolMap.set(tk, b);
+    });
+
+    const daySeed = `${dateKey()}#${state.dailyOffset}`;
+    const candidates = [...poolMap.values()].map((b) => {
+      let score = (genreScore.get(b.genre) || 0) * 1.45 + (authorScore.get(b.author) || 0) * 1.2;
+      if (finishedGenres.has(b.genre)) score += 1.2;
+      if (b.fromOnline) score += 0.9; // 鼓励发掘书库之外的新书
+      if (!state.books.length) score += (b.wordsWan && b.wordsWan < 25 ? 1.4 : 0.4);
+      // 每日 + 换一批的确定性扰动，让每次「换一批」都有新面孔
+      score += hashStr(`${daySeed}|${b.title}`) * 1.6;
+
+      let reason = b.onlineReason || '';
+      if (!reason) {
+        if (topAuthor && b.author === topAuthor) reason = `你花了不少时间读 ${topAuthor} 的作品`;
         else if (authorScore.get(b.author)) reason = `你读过 ${b.author} 的作品`;
+        else if (topGenre && b.genre === topGenre) reason = `契合你在「${b.genre}」的阅读时长与高分偏好`;
         else if (finishedGenres.has(b.genre)) reason = `你读完过同题材好书 · ${b.genre}`;
         else if (b.wordsWan && b.wordsWan <= 14) reason = '篇幅轻巧，适合这几天开读';
         else reason = '高口碑经典，值得放进书房';
-        return { ...b, reason, score };
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 4);
+      }
+      return { ...b, reason, score };
+    }).sort((a, b) => b.score - a.score).slice(0, 4);
 
     if (!candidates.length) {
       return (window.CURATED_BOOKS || []).slice(0, 3).map((b) => ({ ...b, reason: '书房经典，随时可以重读' }));
@@ -2473,7 +2732,44 @@
     return candidates;
   }
 
-  function renderRecommendations() {
+  async function maybeFetchOnlineRecommendations() {
+    const { sortedGenres, sortedAuthors } = computeUserTaste();
+    const topGenre = sortedGenres[0]?.[0] || '';
+    const topAuthor = sortedAuthors[0]?.[0] || '';
+    const key = `${dateKey()}|${topGenre}|${topAuthor}`;
+    if (state.onlineRecKey === key || state.onlineRecLoading) return;
+    const queries = [];
+    if (topAuthor) queries.push({ q: topAuthor, reason: `联网发掘 · 你偏爱 ${topAuthor} 的作品` });
+    if (topGenre) queries.push({ q: `${topGenre} 经典`, reason: `联网发掘 · 契合你的「${topGenre}」偏好` });
+    if (!queries.length) queries.push({ q: '经典文学 畅销', reason: '联网精选 · 口碑佳作推荐' });
+
+    state.onlineRecLoading = true;
+    try {
+      const results = await Promise.allSettled(queries.map((item) => fetchAppleBooks(item.q, 4500)));
+      const collected = [];
+      results.forEach((res, idx) => {
+        if (res.status === 'fulfilled' && res.value.list.length) {
+          res.value.list.slice(0, 6).forEach((b) => {
+            collected.push({
+              ...b,
+              fromOnline: true,
+              onlineReason: queries[idx].reason,
+              spineColor: pickColorFor(b.title),
+            });
+          });
+        }
+      });
+      state.onlineRecKey = key;
+      if (collected.length) {
+        state.onlineRecs = collected;
+        if (state.tab === 'daily') renderRecommendations(true);
+      }
+    } catch { /* offline */ } finally {
+      state.onlineRecLoading = false;
+    }
+  }
+
+  function renderRecommendations(skipFetch = false) {
     state.recommendations = computeRecommendations();
     const list = $('#recommendedBooksList');
     if (!list) return;
@@ -2481,13 +2777,14 @@
       <div class="rec-card">
         <div class="rec-cover" style="--spine-bg:${esc(b.spineColor || pickColorFor(b.title))}">
           ${typoCover(b)}
+          ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
         </div>
         <div class="rec-info">
           <div class="rec-title-row"><strong>${esc(b.title)}</strong><span class="mini-tag gold">${esc(b.genre)}</span></div>
           <div class="rec-reason">${esc(b.reason || '')}</div>
-          <div class="rec-summary">${esc(b.summary || '')}</div>
+          <div class="rec-summary">${esc(b.summary || '点击加入书架，开始记录阅读进度与笔记。')}</div>
           <div class="rec-bottom">
-            <span class="mini-tag">${b.pages ? `${b.pages} 页 · ` : ''}${fmtWords(b.wordsWan)}</span>
+            <span class="mini-tag">${b.pages ? `${b.pages} 页 · ` : ''}${b.wordsWan ? fmtWords(b.wordsWan) : (b.fromOnline ? '联网推荐' : '精选书目')}</span>
             <button class="btn btn-soft btn-sm" type="button" data-rec-add="${i}">加入书架</button>
           </div>
         </div>
@@ -2495,9 +2792,14 @@
 
     const sub = $('#recReasonSub');
     if (sub) {
-      const top = topGenres(2);
-      sub.textContent = top.length ? `基于你偏爱的「${top.join('」「')}」与评分习惯` : '基于内置精选书库，先读几本再个性化推荐';
+      const { sortedGenres } = computeUserTaste();
+      const top = sortedGenres.slice(0, 2).map((x) => x[0]);
+      sub.textContent = top.length
+        ? `综合阅读时长、评分与「${top.join('」「')}」偏好（含联网发掘）`
+        : '综合内置精选与联网书库推荐，读几本后更懂你的口味';
     }
+
+    if (!skipFetch) maybeFetchOnlineRecommendations();
   }
 
   function bindDaily() {

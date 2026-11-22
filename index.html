@@ -111,17 +111,24 @@
         <!-- Dynamic Filter Chips (Genre or Author) -->
         <div class="chip-scroll" id="filterChipBar" role="tablist" aria-label="书籍分类筛选"></div>
 
-        <!-- Tip Bar -->
+        <!-- Tip Bar + View Mode & Sort -->
         <div class="shelf-hint-row" id="shelfHintRow">
           <span class="shelf-hint-text" id="shelfHintText">轻点书脊展开封面 · 再点进入详情</span>
-          <div class="shelf-sort-wrap">
-            <select id="shelfSortSelect" class="mini-select" aria-label="排序方式">
-              <option value="recent">最近阅读</option>
-              <option value="rating">评分最高</option>
-              <option value="progress">进度优先</option>
-              <option value="words">字数从多到少</option>
-              <option value="newest">最新录入</option>
-            </select>
+          <div class="shelf-right-tools">
+            <div class="view-mode-toggle" id="shelfViewToggle" role="group" aria-label="书架显示方式">
+              <button type="button" class="view-btn active" data-view="spine" title="实体书脊书架">书籍</button>
+              <button type="button" class="view-btn" data-view="cover" title="实体书封面陈列">封面</button>
+              <button type="button" class="view-btn" data-view="list" title="书单列表">列表</button>
+            </div>
+            <div class="shelf-sort-wrap">
+              <select id="shelfSortSelect" class="mini-select" aria-label="排序方式">
+                <option value="recent">最近阅读</option>
+                <option value="rating">评分最高</option>
+                <option value="progress">进度优先</option>
+                <option value="words">字数从多到少</option>
+                <option value="newest">最新录入</option>
+              </select>
+            </div>
           </div>
         </div>
 
