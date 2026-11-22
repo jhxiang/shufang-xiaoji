@@ -793,6 +793,7 @@
           <div class="book-list-actions">
             <button type="button" class="book-list-btn primary" data-act="timer" data-id="${esc(b.id)}">⏱ 计时</button>
             <button type="button" class="book-list-btn" data-act="note" data-id="${esc(b.id)}">✍️ 笔记</button>
+            <button type="button" class="book-list-btn danger" data-act="delete" data-id="${esc(b.id)}">删除</button>
           </div>
         </div>`;
       }).join('');
@@ -894,6 +895,11 @@
         <button class="exp-act-btn" type="button" data-act="note" data-id="${esc(book.id)}">✍️ 笔记</button>
         <button class="exp-act-btn" type="button" data-act="detail" data-id="${esc(book.id)}">📖 详情</button>
         <button class="exp-act-btn" type="button" data-act="finish" data-id="${esc(book.id)}">${book.status === 'finished' ? '✓ 已读' : '✓ 读毕'}</button>
+        <button class="exp-act-btn danger-soft" type="button" data-act="delete" data-id="${esc(book.id)}" title="从书架删除" aria-label="删除这本书">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+          </svg>
+        </button>
       </div>
     </div>`;
   }
@@ -937,6 +943,7 @@
         else if (act === 'note') openNoteEditor(id);
         else if (act === 'detail') openDetail(id);
         else if (act === 'finish') toggleFinished(id);
+        else if (act === 'delete') confirmRemoveBook(id);
         return;
       }
       const openBtn = e.target.closest('[data-open-detail]');
@@ -1057,6 +1064,19 @@
       state.search = '';
       renderShelf();
     });
+  }
+
+  async function confirmRemoveBook(id) {
+    const b = getBook(id);
+    if (!b) return;
+    if (!window.confirm(`确定要从书架删除《${b.title}》吗？该书的笔记与阅读记录也会一并移除。`)) return;
+    await deleteBook(id);
+    if (state.detailBookId === id) closeSheet('bookDetailBackdrop');
+    renderShelf();
+    renderDaily();
+    renderStats();
+    renderSettings();
+    toast(`已删除《${b.title}》`);
   }
 
   function toggleFinished(id) {
@@ -1397,6 +1417,7 @@
     await saveBook(book);
     syncBookColorFromCover(book);
     toast(`《${book.title}》已加入想读`);
+    if (state.searchResults.length) renderOnlineResults(state.searchResults);
     renderDaily();
   }
 
@@ -1596,7 +1617,10 @@
   function renderOnlineResults(results) {
     const listEl = $('#onlineBookList');
     if (!listEl) return;
-    listEl.innerHTML = results.map((r, i) => `
+    const ownedKeys = new Set(state.books.map((b) => normalizeTitleKey(b.title)));
+    listEl.innerHTML = results.map((r, i) => {
+      const inShelf = ownedKeys.has(normalizeTitleKey(r.title));
+      return `
       <div class="online-book-item">
         <div class="online-book-cover" style="--spine-bg:${esc(r.spineColor || pickColorFor(r.title))};position:relative">
           ${typoCover(r)}
@@ -1607,11 +1631,12 @@
           <div class="online-book-sub">${esc(r.author)} · ${esc(r.genre)}${r.pages ? ` · ${r.pages} 页` : ''}${r.wordsWan ? ` · 约 ${fmtWords(r.wordsWan)}` : ''}</div>
           <div class="online-book-desc">${esc(r.summary || '暂无简介，可加入后自行补充。')}</div>
           <div class="online-book-btns">
-            <button type="button" class="btn btn-primary btn-sm" data-add-result="${i}">加入书架</button>
+            <button type="button" class="btn ${inShelf ? 'btn-soft' : 'btn-primary'} btn-sm" data-add-result="${i}"${inShelf ? ' disabled' : ''}>${inShelf ? '✓ 已在书架' : '加入书架'}</button>
             <button type="button" class="btn btn-secondary btn-sm" data-edit-result="${i}">先编辑</button>
           </div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
 
   function stripHtml(html) {
@@ -3809,15 +3834,14 @@ ${libraryDigest() || '（暂无）'}
 
   /* =============================== 清理历史测试书 =============================== */
   async function purgeLegacyDemoBooks() {
-    if (getMeta('demoPurgedV1', false)) return;
+    if (getMeta('demoPurgedV2', false)) return;
     const demoTitles = new Set(['三体', '人类简史', '活着', '百年孤独']);
-    const demoSnippets = ['给岁月以文明', '黑暗森林法则', '认知革命', '福贵', '布恩迪亚', '马孔多'];
-    const toRemove = state.books.filter((b) => {
-      if (!demoTitles.has(b.title) || b.coverUrl) return false;
-      const noteText = (b.notes || []).map((n) => n.content || '').join(' ');
-      const charText = (b.characters || []).map((c) => c.name || '').join(' ');
-      return demoSnippets.some((kw) => noteText.includes(kw) || charText.includes(kw));
-    });
+    const fiveDaysAgo = Date.now() - 86400000 * 5;
+    const toRemove = state.books.filter((b) => (
+      demoTitles.has(b.title)
+      && !b.coverUrl
+      && (!b.createdAt || b.createdAt < fiveDaysAgo)
+    ));
     if (toRemove.length) {
       const rmIds = new Set(toRemove.map((b) => b.id));
       for (const b of toRemove) {
@@ -3831,7 +3855,7 @@ ${libraryDigest() || '（暂无）'}
       state.sessions = state.sessions.filter((s) => !rmIds.has(s.bookId));
       if (rmIds.has(state.selectedBookId)) state.selectedBookId = null;
     }
-    await setMeta('demoPurgedV1', true);
+    await setMeta('demoPurgedV2', true);
   }
 
   function registerSW() {

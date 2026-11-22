@@ -889,7 +889,7 @@ input, textarea, select {
 
 .expanded-actions {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, 1fr) 36px;
   gap: 6px;
   margin-top: 12px;
   padding-top: 11px;
@@ -3112,6 +3112,12 @@ html.native-shell .sheet-body {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
+}
+
+.book-list-btn.danger {
+  color: #C44536;
+  border-color: rgba(196, 69, 54, 0.28);
+  background: rgba(196, 69, 54, 0.06);
 }
 
 /* 推荐卡片支持真实封面图 */
