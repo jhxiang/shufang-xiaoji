@@ -1,28 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
-    <linearGradient id="lightBg" x1="0.1" y1="0" x2="0.9" y2="1">
-      <stop offset="0%" stop-color="#FDFCF9"/>
-      <stop offset="55%" stop-color="#F6F2EA"/>
-      <stop offset="100%" stop-color="#ECE5D8"/>
+    <linearGradient id="eleSlate" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0%" stop-color="#90A0B5"/>
+      <stop offset="100%" stop-color="#69798F"/>
     </linearGradient>
-    <linearGradient id="eleGreen" x1="0.15" y1="0" x2="0.85" y2="1">
-      <stop offset="0%" stop-color="#35725C"/>
-      <stop offset="100%" stop-color="#1F4D3D"/>
+    <linearGradient id="earLight" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#B4C1D1"/>
+      <stop offset="100%" stop-color="#94A4B8"/>
     </linearGradient>
-    <linearGradient id="earSoft" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#518F78"/>
-      <stop offset="100%" stop-color="#366E5A"/>
-    </linearGradient>
-    <linearGradient id="bookBase" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="bookPage" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="100%" stop-color="#F3EDE2"/>
+      <stop offset="100%" stop-color="#F5F7FA"/>
     </linearGradient>
-    <linearGradient id="ribbonAmber" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#EB9557"/>
-      <stop offset="100%" stop-color="#CF6D36"/>
+    <linearGradient id="ribbonWarm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F0A165"/>
+      <stop offset="100%" stop-color="#D97B41"/>
     </linearGradient>
-    <filter id="gentleShadow" x="-15%" y="-15%" width="130%" height="135%">
-      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#22382F" flood-opacity="0.12"/>
+    <filter id="cleanShadow" x="-15%" y="-15%" width="130%" height="135%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#4A5A70" flood-opacity="0.12"/>
     </filter>
     <clipPath id="roundedClip">
       <rect width="1024" height="1024" rx="228"/>
@@ -30,23 +25,21 @@
   </defs>
 
   <g clip-path="url(#roundedClip)">
-    <!-- Minimalist Light Warm-Paper Background -->
-    <rect width="1024" height="1024" fill="url(#lightBg)"/>
-    <circle cx="810" cy="210" r="240" fill="#FFFFFF" opacity="0.65"/>
-    <circle cx="200" cy="840" r="210" fill="#E3D6C3" opacity="0.28"/>
+    <!-- Pure White Background -->
+    <rect width="1024" height="1024" fill="#FFFFFF"/>
   </g>
 
-  <g filter="url(#gentleShadow)">
+  <g filter="url(#cleanShadow)">
     <!-- Minimalist Open Book -->
     <path d="M206 646 C290 614, 418 616, 512 664 C606 616, 734 614, 818 646
              L798 742 C720 712, 604 714, 512 758 C420 714, 304 712, 226 742 Z"
-          fill="url(#bookBase)" stroke="#D9CEBD" stroke-width="6" stroke-linejoin="round"/>
-    <path d="M512 664 L512 756" stroke="#D3C6B3" stroke-width="6" stroke-linecap="round"/>
+          fill="url(#bookPage)" stroke="#D4DCE6" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M512 664 L512 756" stroke="#CCD6E2" stroke-width="6" stroke-linecap="round"/>
 
-    <!-- Minimalist Warm Amber Bookmark ("阅痕") -->
-    <path d="M542 730 L592 716 L592 842 L567 818 L542 842 Z" fill="url(#ribbonAmber)"/>
+    <!-- Minimalist Warm Bookmark ("阅痕") -->
+    <path d="M542 730 L592 716 L592 842 L567 818 L542 842 Z" fill="url(#ribbonWarm)"/>
 
-    <!-- Minimalist Deep-Sage Little Elephant -->
+    <!-- Minimalist Soft Grey-Blue Little Elephant -->
     <path d="M324 610
              C304 548, 308 446, 364 374
              C410 314, 488 286, 562 302
@@ -60,23 +53,23 @@
              C632 544, 622 574, 620 608
              C568 596, 536 608, 512 624
              C476 604, 394 598, 324 610 Z"
-          fill="url(#eleGreen)"/>
+          fill="url(#eleSlate)"/>
 
-    <!-- Minimalist Ear with Delicate Page Lines -->
+    <!-- Soft Ear with Delicate Page Lines -->
     <path d="M452 348
              C388 350, 352 410, 362 476
              C370 530, 418 558, 468 544
              C506 534, 526 488, 520 432
              C514 376, 490 346, 452 348 Z"
-          fill="url(#earSoft)"/>
-    <path d="M408 414 C432 408, 458 418, 474 434" fill="none" stroke="#F8F5EE" stroke-width="9" stroke-linecap="round" opacity="0.82"/>
-    <path d="M404 456 C428 452, 452 460, 468 474" fill="none" stroke="#F8F5EE" stroke-width="8" stroke-linecap="round" opacity="0.62"/>
+          fill="url(#earLight)"/>
+    <path d="M408 414 C432 408, 458 418, 474 434" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" opacity="0.88"/>
+    <path d="M404 456 C428 452, 452 460, 468 474" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.68"/>
 
-    <!-- Clean White Eye -->
-    <circle cx="598" cy="412" r="14" fill="#FCFBF8"/>
-    <circle cx="601" cy="410" r="6" fill="#173A2E"/>
+    <!-- Clean Expressive Eye -->
+    <circle cx="598" cy="412" r="14" fill="#FFFFFF"/>
+    <circle cx="601" cy="410" r="6" fill="#2E3B4E"/>
 
-    <!-- Soft Warm Sparkle -->
-    <path d="M772 282 L781 308 L807 317 L781 326 L772 352 L763 326 L737 317 L763 308 Z" fill="#E38B4F"/>
+    <!-- Tiny Warm Sparkle -->
+    <path d="M772 282 L781 308 L807 317 L781 326 L772 352 L763 326 L737 317 L763 308 Z" fill="#EC9A5E"/>
   </g>
 </svg>
