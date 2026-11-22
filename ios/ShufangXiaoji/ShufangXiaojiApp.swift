@@ -1,6 +1,6 @@
 //
 //  ShufangXiaojiApp.swift
-//  书房小记 · 阅读记录与洞察
+//  eleread · 阅读记录与洞察
 //
 //  SwiftUI 原生外壳：WKWebView 承载本地 Web 应用，
 //  并通过 JS Bridge 提供 Vision OCR、语音听写、图片分享等原生能力。

@@ -152,7 +152,7 @@ final class WebAppViewController: UIViewController {
         DispatchQueue.main.async { [weak self] in
             self?.webView.evaluateJavaScript(script) { _, error in
                 if let error = error {
-                    NSLog("[书房小记] JS 执行失败: %@", error.localizedDescription)
+                    NSLog("[eleread] JS 执行失败: %@", error.localizedDescription)
                 }
             }
         }
@@ -204,7 +204,7 @@ extension WebAppViewController: WKScriptMessageHandler {
         case "clearSnapshot":
             PersistentStore.shared.clearSnapshot()
         default:
-            NSLog("[书房小记] 未知的桥接消息: %@", type)
+            NSLog("[eleread] 未知的桥接消息: %@", type)
         }
     }
 
@@ -383,13 +383,13 @@ extension WebAppViewController: WKNavigationDelegate, WKUIDelegate {
 
     // 允许 JS alert / confirm（调试期友好）
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-        let alert = UIAlertController(title: "书房小记", message: message, preferredStyle: .alert)
+        let alert = UIAlertController(title: "eleread", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "好", style: .default) { _ in completionHandler() })
         present(alert, animated: true)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-        let alert = UIAlertController(title: "书房小记", message: message, preferredStyle: .alert)
+        let alert = UIAlertController(title: "eleread", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(false) })
         alert.addAction(UIAlertAction(title: "确定", style: .default) { _ in completionHandler(true) })
         present(alert, animated: true)

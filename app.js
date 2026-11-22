@@ -1,5 +1,5 @@
 /* =========================================================================
- * 书房小记 · app.js
+ * eleread · app.js
  * 阅读计时 / 书架书脊 / 双维度分类 / 读后感（语音·拍照 OCR）/ 人物关系图谱
  * 每日拾页 / 荐书 / 阅读习惯与时段分析 / 备份恢复 / 豆包 AI
  * ========================================================================= */
@@ -348,9 +348,9 @@
   window.__shufangPermissionDenied = (kind) => {
     stopDictationUI();
     if (kind === 'microphone') {
-      toast('麦克风权限被拒绝：请在 设置 › 书房小记 中开启麦克风', { duration: 3600 });
+      toast('麦克风权限被拒绝：请在 设置 › eleread 中开启麦克风', { duration: 3600 });
     } else if (kind === 'speech') {
-      toast('语音识别权限被拒绝：请在 设置 › 书房小记 中开启语音识别', { duration: 3600 });
+      toast('语音识别权限被拒绝：请在 设置 › eleread 中开启语音识别', { duration: 3600 });
     } else {
       toast('缺少系统权限，请在「设置」中开启');
     }
@@ -2626,7 +2626,7 @@
     ctx.fillStyle = accent;
     ctx.font = 'bold 24px -apple-system, "PingFang SC", sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText('书房小记 · 每日拾页', W - 96, footerY + 42);
+    ctx.fillText('eleread · 每日拾页', W - 96, footerY + 42);
     ctx.textAlign = 'left';
   }
 
@@ -2666,7 +2666,7 @@
       const canvas = $('#posterCanvas');
       if (!canvas) return;
       const dataUrl = canvas.toDataURL('image/png');
-      shareDataUrl(dataUrl, '书房小记-摘录卡片.png');
+      shareDataUrl(dataUrl, 'eleread-摘录卡片.png');
     });
     $('#copyPosterQuoteBtn')?.addEventListener('click', async () => {
       const q = state.posterQuote;
@@ -2969,7 +2969,7 @@
       },
     };
     const json = JSON.stringify(data);
-    const filename = `书房小记备份-${dateKey()}.json`;
+    const filename = `eleread备份-${dateKey()}.json`;
     if (bridge.available) {
       const base64 = btoa(unescape(encodeURIComponent(json)));
       bridge.post({ type: 'shareFile', filename, mime: 'application/json', base64 });
