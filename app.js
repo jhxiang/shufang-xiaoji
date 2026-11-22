@@ -777,7 +777,7 @@
         return `<div class="book-list-row" data-open-detail="${esc(b.id)}">
           <div class="physical-book book-list-cover" style="--spine-bg:${esc(b.spineColor)}">
             ${typoCover(b)}
-            ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+            ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
           </div>
           <div class="book-list-body">
             <div class="book-list-head">
@@ -812,7 +812,7 @@
           title="${esc(b.title)} · ${STATUS_LABELS[b.status]}">
           <div class="physical-book" style="--spine-bg:${esc(b.spineColor)}">
             ${typoCover(b)}
-            ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+            ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
             <span class="cover-badge-status ${statusCls}">${STATUS_LABELS[b.status]}</span>
             <span class="cover-progress-strip"><span style="width:${clamp(b.progress, 0, 100)}%"></span></span>
           </div>
@@ -836,7 +836,7 @@
       const dot = b.status === 'finished' ? 'finished' : (b.status === 'reading' ? 'reading' : '');
       const hasCover = b.coverUrl ? ' has-cover' : '';
       const coverLayer = b.coverUrl
-        ? `<img class="spine-cover-img" src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.parentElement.classList.remove('has-cover');this.remove()"><span class="spine-cylinder-light"></span>`
+        ? `<img class="spine-cover-img" src="${esc(b.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.remove('has-cover');this.remove()"><span class="spine-cylinder-light"></span>`
         : '';
       return `<button type="button" class="book-spine${sel}${hasCover}" data-book-id="${esc(b.id)}"
         title="${esc(b.title)} · ${esc(b.author)} · ${STATUS_LABELS[b.status]}"
@@ -870,7 +870,7 @@
       <div class="expanded-top">
         <div class="book-cover-box" style="--spine-bg:${esc(book.spineColor)}" data-open-detail="${esc(book.id)}" role="button" tabindex="0" aria-label="查看详情">
           ${typoCover(book)}
-          ${book.coverUrl ? `<img src="${esc(book.coverUrl)}" alt="" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">` : ''}
+          ${book.coverUrl ? `<img src="${esc(book.coverUrl)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">` : ''}
         </div>
         <div class="expanded-meta">
           <div class="expanded-head-row">
@@ -1521,43 +1521,29 @@
     if (!q) { status.textContent = '请输入书名、作者或 ISBN'; return; }
 
     const searchToken = ++state.searchSeq;
-    const lower = q.toLowerCase();
-    const localHits = (window.CURATED_BOOKS || []).filter((b) => (
-      b.title.toLowerCase().includes(lower)
-      || b.author.toLowerCase().includes(lower)
-      || b.genre.includes(q)
-      || (b.summary || '').toLowerCase().includes(lower)
-    )).map((b) => ({ ...b, local: true }));
-
-    // 本地精选库命中时立即展示，联网结果增量追加
     let onlineList = [];
     const sources = new Set();
-    if (localHits.length) sources.add('内置精选书库');
 
     const applyMerged = (done) => {
       if (state.searchSeq !== searchToken) return;
-      const merged = mergeResults(localHits, onlineList, q);
+      const merged = mergeResults([], onlineList, q);
       state.searchResults = merged;
       if (merged.length) {
         const srcText = [...sources].join(' + ');
         status.textContent = done
-          ? `${srcText ? `来源：${srcText} · ` : ''}仅含封面、简介、页数与估算字数（共 ${merged.length} 条）`
-          : `已获取 ${merged.length} 条（${srcText}）· 正在补充更多版本…`;
+          ? `全网来源：${srcText} · 共 ${merged.length} 个版本（含封面、字数与简介）`
+          : `已检索到 ${merged.length} 个版本（${srcText}）· 正在加载更多版本与字数…`;
         renderOnlineResults(merged);
       } else if (done) {
-        status.textContent = '没有找到结果，试试更简短的书名或作者，也可以手动录入。';
+        status.textContent = '全网未找到匹配版本，试试更简短的书名或作者，也可以手动录入。';
         listEl.innerHTML = '<div class="search-empty">没有匹配的书籍，可直接「手动录入」。</div>';
       }
     };
 
-    if (localHits.length) {
-      applyMerged(false);
-    } else {
-      status.textContent = `正在联网检索「${q}」…`;
-      listEl.innerHTML = '<div class="search-skeleton">正在联网获取书籍信息…</div>';
-    }
+    status.textContent = `正在全网检索「${q}」不同版本…`;
+    listEl.innerHTML = '<div class="search-skeleton">正在全网检索不同版本封面、简介与字数…</div>';
 
-    // 按查询意图路由：ISBN 精准查询 / 英文 4 源并行 / 中文 Apple+Google 优先并增量补源
+    // 按查询意图并发全网检索：iOS 原生走 URLSession 无 CORS 限制，直连微信读书 + 豆瓣多版本
     const isbn = parseIsbn(q);
     const isCJK = hasCJK(q);
     const handleSource = (p) => p.then((res) => {
@@ -1565,7 +1551,7 @@
       if (res && res.list && res.list.length) {
         const tagged = res.list.map((item, idx) => ({
           ...item,
-          _source: res.source || 'online',
+          _source: res.source || '全网',
           _rank: idx + 1,
         }));
         onlineList = onlineList.concat(tagged);
@@ -1574,35 +1560,41 @@
       }
     }).catch(() => {});
 
+    const tasks = [];
     if (isbn) {
-      await Promise.all([
+      tasks.push(
         handleSource(fetchGoogleBooks(`isbn:${isbn}`)),
         handleSource(fetchOpenLibrary(`isbn:${isbn}`)),
         handleSource(fetchAppleBooks(isbn)),
-      ]);
-    } else if (!isCJK) {
-      // 英文/外文查询：4 源直接并行，RRF 融合排序
-      await Promise.all([
+      );
+      if (bridge.available) {
+        tasks.push(handleSource(fetchDoubanBooks(isbn)), handleSource(fetchWeReadBooks(isbn)));
+      }
+    } else if (isCJK) {
+      if (bridge.available) {
+        // 原生 App 内直连中文全网源（微信读书 + 豆瓣多版本）与国际源并行
+        tasks.push(
+          handleSource(fetchWeReadBooks(q)),
+          handleSource(fetchDoubanBooks(q)),
+        );
+      }
+      tasks.push(
+        handleSource(fetchAppleBooks(q)),
+        handleSource(fetchGoogleBooks(q)),
+        handleSource(fetchOpenLibrary(q)),
+      );
+    } else {
+      tasks.push(
         handleSource(fetchOpenLibrary(q)),
         handleSource(fetchGoogleBooks(q)),
         handleSource(fetchAppleBooks(q)),
-        handleSource(fetchGutendex(q)),
-      ]);
-    } else {
-      // 中文查询：Apple Books（国内直连快）与 Google Books 优先并行
-      await Promise.all([
-        handleSource(fetchAppleBooks(q)),
-        handleSource(fetchGoogleBooks(q)),
-      ]);
-      if (state.searchSeq !== searchToken) return;
-      if (onlineList.length < 6) {
-        await Promise.all([
-          handleSource(fetchOpenLibrary(q)),
-          handleSource(fetchGutendex(q)),
-        ]);
+      );
+      if (bridge.available) {
+        tasks.push(handleSource(fetchDoubanBooks(q)), handleSource(fetchWeReadBooks(q)));
       }
     }
 
+    await Promise.all(tasks);
     if (state.searchSeq !== searchToken) return;
     applyMerged(true);
   }
@@ -1697,88 +1689,108 @@
   }
 
   function mergeResults(local, online, query = '') {
-    const byKey = new Map();
-    const isbnToKey = new Map();
     const queryIsCJK = hasCJK(query);
     const RRF_K = 60;
     const SOURCE_WEIGHT = {
-      '内置精选书库': 1.25,
-      'Apple Books': queryIsCJK ? 1.2 : 1.0,
+      '微信读书': 1.35,
+      '豆瓣读书': 1.30,
+      'Apple Books': queryIsCJK ? 1.15 : 1.0,
       'Google Books': 1.1,
       'Open Library': queryIsCJK ? 0.95 : 1.15,
-      'Gutendex 公版库': 0.9,
     };
 
-    const ingest = (raw, fallbackRank) => {
-      if (!raw || !raw.title) return;
-      const isbn = raw.isbn ? parseIsbn(raw.isbn) : '';
-      const titleKey = normalizeTitleKey(raw.title) || `${raw.title}|${raw.author}`.toLowerCase();
-      // 优先按 ISBN 聚类，其次按归一化书名聚类
-      const key = (isbn && isbnToKey.get(isbn)) || titleKey;
-      if (isbn && !isbnToKey.has(isbn)) isbnToKey.set(isbn, key);
-
-      const src = raw._source || (raw.local ? '内置精选书库' : 'online');
-      const rank = raw._rank || fallbackRank || 1;
-      const rrfDelta = (SOURCE_WEIGHT[src] || 1) / (RRF_K + rank);
-
-      const prev = byKey.get(key);
-      if (!prev) {
-        byKey.set(key, { ...raw, isbn, _rrfScore: rrfDelta, _sources: new Set([src]) });
-        return;
-      }
-      prev._rrfScore = (prev._rrfScore || 0) + rrfDelta;
-      prev._sources.add(src);
-      if (!prev.isbn && isbn) prev.isbn = isbn;
-
-      // 跨书源字段智能融合：保留最优封面、最完整简介、真实页数/字数与匹配语言的作者名
-      if (!prev.coverUrl && raw.coverUrl) prev.coverUrl = raw.coverUrl;
-      else if (prev.coverUrl && raw.coverUrl && raw.coverUrl.includes('mzstatic.com') && !prev.coverUrl.includes('mzstatic.com')) {
-        prev.coverUrl = raw.coverUrl;
-      }
-      if (!prev.pages && raw.pages) prev.pages = raw.pages;
-      if (!prev.wordsWan && raw.wordsWan) prev.wordsWan = raw.wordsWan;
+    // 第一步：按归一化书名收集「最优页数 / 字数 / 简介 / 作者」作为同书元数据知识池，反哺各版本
+    const metaByTitle = new Map();
+    const allItems = [...(local || []), ...(online || [])].filter((x) => x && x.title);
+    allItems.forEach((raw) => {
+      const tk = normalizeTitleKey(raw.title);
+      if (!tk) return;
+      const cur = metaByTitle.get(tk) || { pages: 0, wordsWan: 0, summary: '', author: '' };
+      if (!cur.pages && raw.pages) cur.pages = raw.pages;
+      if (!cur.wordsWan && raw.wordsWan) cur.wordsWan = raw.wordsWan;
       if (raw.summary) {
-        const prevBetterLang = queryIsCJK && hasCJK(prev.summary) && !hasCJK(raw.summary);
-        const rawBetterLang = queryIsCJK && hasCJK(raw.summary) && !hasCJK(prev.summary);
-        if (rawBetterLang || (!prevBetterLang && raw.summary.length > (prev.summary || '').length)) {
-          prev.summary = raw.summary;
+        const curBetter = queryIsCJK && hasCJK(cur.summary) && !hasCJK(raw.summary);
+        const rawBetter = queryIsCJK && hasCJK(raw.summary) && !hasCJK(cur.summary);
+        if (rawBetter || (!curBetter && raw.summary.length > cur.summary.length)) {
+          cur.summary = raw.summary;
         }
       }
       if (raw.author && raw.author !== '佚名') {
-        if (!prev.author || prev.author === '佚名' || (queryIsCJK && hasCJK(raw.author) && !hasCJK(prev.author))) {
-          prev.author = raw.author;
+        if (!cur.author || (queryIsCJK && hasCJK(raw.author) && !hasCJK(cur.author))) {
+          cur.author = raw.author;
         }
       }
-      if (raw.local) prev.local = true;
-    };
+      metaByTitle.set(tk, cur);
+    });
 
-    local.forEach((item, i) => ingest(item, i + 1));
-    online.forEach((item, i) => ingest(item, i + 1));
+    // 第二步：保留不同版本的独立封面（按「归一化书名 + 版本特征/封面URL」去重，不粗暴折叠不同装帧版本）
+    const byEdition = new Map();
+    allItems.forEach((raw, i) => {
+      const tk = normalizeTitleKey(raw.title) || `${raw.title}|${raw.author}`.toLowerCase();
+      const src = raw._source || '全网';
+      const rank = raw._rank || (i + 1);
+      const rrfDelta = (SOURCE_WEIGHT[src] || 1) / (RRF_K + rank);
 
-    return [...byKey.values()]
+      // 同一书名下：如果封面图不同、或年份/出版社不同，保留为独立版本供用户挑选封面
+      const coverSig = raw.coverUrl ? raw.coverUrl.replace(/^https?:\/\//, '').split('?')[0] : '';
+      const editionSig = coverSig || `${raw.year || ''}|${raw.publisher || ''}|${src}`;
+      const edKey = `${tk}@@${editionSig}`;
+
+      const prev = byEdition.get(edKey);
+      if (!prev) {
+        const shared = metaByTitle.get(tk) || {};
+        const enriched = {
+          ...raw,
+          pages: raw.pages || shared.pages || 0,
+          wordsWan: raw.wordsWan || shared.wordsWan || (raw.pages ? +(raw.pages * 0.065).toFixed(1) : (shared.pages ? +(shared.pages * 0.065).toFixed(1) : 0)),
+          summary: raw.summary || shared.summary || '',
+          author: (raw.author && raw.author !== '佚名') ? raw.author : (shared.author || '佚名'),
+          _rrfScore: rrfDelta,
+          _sourceLabel: src,
+        };
+        byEdition.set(edKey, enriched);
+      } else {
+        prev._rrfScore = (prev._rrfScore || 0) + rrfDelta;
+        if (!prev.pages && raw.pages) prev.pages = raw.pages;
+        if (!prev.wordsWan && raw.wordsWan) prev.wordsWan = raw.wordsWan;
+        if (!prev.summary && raw.summary) prev.summary = raw.summary;
+      }
+    });
+
+    return [...byEdition.values()]
       .sort((a, b) => scoreSearchItem(b, query) - scoreSearchItem(a, query))
-      .slice(0, 14)
+      .slice(0, 18)
       .map((r) => ({ ...r, spineColor: r.spineColor || pickColorFor(r.title) }));
   }
 
   function renderOnlineResults(results) {
     const listEl = $('#onlineBookList');
     if (!listEl) return;
-    const ownedKeys = new Set(state.books.map((b) => normalizeTitleKey(b.title)));
     listEl.innerHTML = results.map((r, i) => {
-      const inShelf = ownedKeys.has(normalizeTitleKey(r.title));
+      const editionMeta = [
+        r.year ? `${r.year}版` : '',
+        r.publisher || '',
+        r.translator ? `${r.translator} 译` : '',
+      ].filter(Boolean).join(' · ');
+      const subMeta = [
+        r.author,
+        r.genre,
+        r.pages ? `${r.pages} 页` : '',
+        r.wordsWan ? `约 ${fmtWords(r.wordsWan)}` : '',
+      ].filter(Boolean).join(' · ');
       return `
       <div class="online-book-item">
         <div class="online-book-cover" style="--spine-bg:${esc(r.spineColor || pickColorFor(r.title))};position:relative">
           ${typoCover(r)}
-          ${r.coverUrl ? `<img src="${esc(r.coverUrl)}" alt="" loading="lazy" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">` : ''}
+          ${r.coverUrl ? `<img src="${esc(r.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">` : ''}
         </div>
         <div class="online-book-info">
-          <h4>${esc(r.title)} ${r.local ? '<span class="mini-tag primary">精选</span>' : ''}</h4>
-          <div class="online-book-sub">${esc(r.author)} · ${esc(r.genre)}${r.pages ? ` · ${r.pages} 页` : ''}${r.wordsWan ? ` · 约 ${fmtWords(r.wordsWan)}` : ''}</div>
+          <h4>${esc(r.title)} ${r._sourceLabel ? `<span class="mini-tag primary">${esc(r._sourceLabel)}</span>` : ''}</h4>
+          <div class="online-book-sub">${esc(subMeta)}</div>
+          ${editionMeta ? `<div class="online-book-sub" style="opacity:.85">${esc(editionMeta)}</div>` : ''}
           <div class="online-book-desc">${esc(r.summary || '暂无简介，可加入后自行补充。')}</div>
           <div class="online-book-btns">
-            <button type="button" class="btn ${inShelf ? 'btn-soft' : 'btn-primary'} btn-sm" data-add-result="${i}"${inShelf ? ' disabled' : ''}>${inShelf ? '✓ 已在书架' : '加入书架'}</button>
+            <button type="button" class="btn btn-primary btn-sm" data-add-result="${i}">加入书架</button>
             <button type="button" class="btn btn-secondary btn-sm" data-edit-result="${i}">先编辑</button>
           </div>
         </div>
@@ -1800,6 +1812,58 @@
       .replace(/&#39;/gi, "'")
       .replace(/\n{3,}/g, '\n\n')
       .trim();
+  }
+
+  async function fetchWeReadBooks(q, timeout = 5500) {
+    const data = await requestJson(`https://weread.qq.com/web/search/global?keyword=${encodeURIComponent(q)}&maxIdx=0&count=12`, { timeout });
+    const list = (data.books || []).map((entry) => {
+      const i = entry.bookInfo || {};
+      const title = i.title || '';
+      const author = i.author || '佚名';
+      const summary = stripHtml(i.intro || '');
+      const rawCover = i.cover || '';
+      // 微信读书 s_ 替换为 t6_ 获取高清封面图
+      const coverUrl = rawCover ? rawCover.replace(/\/s_([^/]+)$/, '/t6_$1') : '';
+      const wordsWan = i.totalWords ? +(Number(i.totalWords) / 10000).toFixed(1) : 0;
+      const pages = wordsWan ? Math.round(wordsWan / 0.065) : 0;
+      return {
+        title,
+        author,
+        translator: i.translator || '',
+        publisher: i.publisher || '',
+        year: i.publishTime ? String(i.publishTime).slice(0, 4) : '',
+        genre: mapGenre(i.category || '', { title, author, summary }),
+        pages,
+        wordsWan,
+        summary: summary.length > 260 ? `${summary.slice(0, 260)}…` : summary,
+        coverUrl,
+      };
+    }).filter((x) => x.title);
+    return { list, source: list.length ? '微信读书' : '' };
+  }
+
+  async function fetchDoubanBooks(q, timeout = 5500) {
+    const data = await requestJson(`https://book.douban.com/j/subject_suggest?q=${encodeURIComponent(q)}`, { timeout });
+    const arr = Array.isArray(data) ? data : [];
+    const list = arr.filter((d) => d && d.title && (!d.type || d.type === 'b')).slice(0, 12).map((d) => {
+      const title = d.title || '';
+      const author = d.author_name || '佚名';
+      const rawPic = d.pic || '';
+      // 豆瓣 /s/ 缩略图替换为 /l/ 高清版本封面
+      const coverUrl = rawPic ? rawPic.replace('/subject/s/', '/subject/l/').replace(/^http:/, 'https:') : '';
+      return {
+        title,
+        author,
+        year: d.year || '',
+        publisher: '',
+        genre: mapGenre('', { title, author, summary: '' }),
+        pages: 0,
+        wordsWan: 0,
+        summary: '',
+        coverUrl,
+      };
+    });
+    return { list, source: list.length ? '豆瓣读书' : '' };
   }
 
   async function fetchAppleBooks(q, timeout = 5500) {
@@ -1923,7 +1987,7 @@
       <div class="detail-hero-card">
         <div class="book-cover-box" style="width:84px;--spine-bg:${esc(book.spineColor)}">
           ${typoCover(book)}
-          ${book.coverUrl ? `<img src="${esc(book.coverUrl)}" alt="" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">` : ''}
+          ${book.coverUrl ? `<img src="${esc(book.coverUrl)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">` : ''}
         </div>
         <div class="detail-hero-meta">
           <h2>${esc(book.title)}</h2>
