@@ -1429,26 +1429,89 @@
   }
 
   /* =============================== 联网搜书 =============================== */
+  // 精细 16 类题材识别：按高特异度优先匹配（推理/科幻/武侠/技术优先于泛文学小说）
   const GENRE_KEYWORDS = [
-    ['科幻', ['science fiction', 'sci-fi', 'space', '科幻']],
-    ['悬疑', ['mystery', 'thriller', 'detective', 'crime', '悬疑', '推理']],
-    ['历史', ['history', 'historical', '历史']],
-    ['心理', ['psychology', 'self-help', 'mental', '心理']],
-    ['哲学', ['philosophy', '哲学']],
-    ['经管', ['business', 'economics', 'finance', 'management', '经济', '管理']],
-    ['传记', ['biography', 'autobiography', 'memoir', '传记']],
-    ['科普', ['science', 'popular science', '科普']],
-    ['散文', ['essay', 'essays', '散文']],
-    ['社科', ['sociology', 'social', 'politics', '社科']],
-    ['文学', ['literary', 'literature', 'poetry', 'fiction', '文学', '小说']],
+    ['推理悬疑', [
+      'mystery', 'thriller', 'detective', 'crime', 'suspense', 'whodunit', 'noir', 'murder',
+      '推理', '悬疑', '侦探', '谋杀', '凶手', '命案', '密室', '破案', '法医', '犯罪', '刑警', '嫌疑人',
+      '东野圭吾', '阿加莎', '克里斯蒂', '柯南道尔', '福尔摩斯', '岛田庄司', '绫辻行人', '江户川乱步',
+      '横沟正史', '松本清张', '宫部美雪', '伊坂幸太郎', '紫金陈', '雷米', '秦明', '周浩晖', '白夜行', '恶意', '解忧'
+    ]],
+    ['科幻奇幻', [
+      'science fiction', 'sci-fi', 'fantasy', 'cyberpunk', 'dystopia', 'space opera', 'magic realism',
+      '科幻', '奇幻', '魔幻', '赛博朋克', '反乌托邦', '星际', '外星', '宇宙文明', '三体', '基地', '沙丘',
+      '刘慈欣', '阿西莫夫', '克拉克', '凡尔纳', '特德·姜', '郝景芳', '托尔金', '魔戒', '哈利·波特', '克苏鲁'
+    ]],
+    ['武侠仙侠', [
+      'wuxia', 'xianxia', 'martial arts',
+      '武侠', '仙侠', '江湖', '侠客', '修仙', '金庸', '古龙', '梁羽生', '温瑞安', '射雕', '天龙八部', '笑傲江湖'
+    ]],
+    ['技术编程', [
+      'computers', 'programming', 'software', 'algorithm', 'artificial intelligence', 'machine learning', 'engineering',
+      '编程', '算法', '计算机', '人工智能', '深度学习', '大模型', '架构', '代码', 'python', 'javascript', '系统设计', '软件工程'
+    ]],
+    ['历史纪实', [
+      'history', 'historical', 'war', 'ancient', 'civilization', 'nonfiction', 'journalism',
+      '历史', '朝代', '通史', '断代史', '战争', '文明史', '纪实', '非虚构', '明朝', '万历', '史记', '资治通鉴', '人类简史', '黄仁宇', '当年明月', '尤瓦尔'
+    ]],
+    ['哲学思辨', [
+      'philosophy', 'ethics', 'logic', 'existentialism', 'stoicism', 'metaphysics',
+      '哲学', '思辨', '存在主义', '伦理学', '美学', '逻辑学', '理想国', '尼采', '康德', '柏拉图', '萨特', '加缪', '叔本华', '维特根斯坦', '道德经', '论语', '庄子'
+    ]],
+    ['心理疗愈', [
+      'psychology', 'self-help', 'mental health', 'therapy', 'counseling', 'mindfulness', 'cognitive',
+      '心理', '疗愈', '情绪', '认知', '行为心理', '自我成长', '亲密关系', '依恋', '阿德勒', '弗洛伊德', '荣格', '被讨厌的勇气', '蛤蟆先生', '思考，快与慢', '丹尼尔·卡尼曼'
+    ]],
+    ['人物传记', [
+      'biography', 'autobiography', 'memoir', 'diaries', 'letters',
+      '传记', '自传', '回忆录', '评传', '书信集', '生平', '苏东坡传', '乔布斯传', '马斯克传', '曾国藩', '茨威格'
+    ]],
+    ['经济商业', [
+      'business', 'economics', 'finance', 'investing', 'management', 'entrepreneurship', 'marketing', 'wealth',
+      '经济', '商业', '金融', '投资', '理财', '管理', '创业', '财富', '资本', '市场', '原则', '纳瓦尔', '置身事内', '瑞·达利欧', '芒格', '巴菲特', '国富论'
+    ]],
+    ['社会政治', [
+      'sociology', 'social science', 'political', 'politics', 'law', 'anthropology', 'public policy',
+      '社会学', '社科', '政治', '法律', '人类学', '公共政策', '乡土中国', '乌合之众', '费孝通', '项飙', '政府', '制度'
+    ]],
+    ['科普自然', [
+      'popular science', 'natural history', 'biology', 'physics', 'astronomy', 'evolution', 'ecology', 'nature', 'science',
+      '科普', '自然科学', '生物学', '物理学', '天文', '进化论', '基因', '博物', '宇宙', '量子', '时间简史', '自私的基因', '道金斯', '霍金', '物种起源'
+    ]],
+    ['诗歌戏剧', [
+      'poetry', 'poems', 'drama', 'plays', 'theater', 'theatre',
+      '诗歌', '诗集', '诗词', '戏剧', '剧本', '话剧', '莎士比亚', '海子', '北岛', '顾城', '泰戈尔', '辛波斯卡', '宋词', '唐诗'
+    ]],
+    ['散文随笔', [
+      'essay', 'essays', 'prose', 'belles-lettres', 'travelogue',
+      '散文', '随笔', '杂文', '游记', '札记', '笔记', '我与地坛', '沉默的大多数', '史铁生', '王小波', '汪曾祺', '周作人', '梁实秋', '林清玄', '余秋雨'
+    ]],
+    ['艺术设计', [
+      'art', 'design', 'architecture', 'photography', 'music', 'film', 'cinema', 'aesthetics',
+      '艺术', '设计', '建筑', '摄影', '电影', '音乐', '美术', '绘画', '书法', '艺术的故事', '贡布里希', '原研哉'
+    ]],
+    ['生活美学', [
+      'cooking', 'food', 'travel', 'lifestyle', 'health', 'fitness', 'gardening', 'minimalism',
+      '美食', '烹饪', '旅行', '生活美学', '极简', '断舍离', '家居', '茶道', '咖啡', '健康', '养生'
+    ]],
+    ['文学小说', [
+      'literary', 'literature', 'fiction', 'novel', 'classics', 'romance',
+      '文学', '小说', '长篇', '短篇', '名著', '古典', '太宰治', '人间失格', '余华', '活着', '马尔克斯', '红楼梦', '村上春树', '黑塞', '小王子'
+    ]],
   ];
 
-  function mapGenre(raw) {
-    const text = String(raw || '').toLowerCase();
+  function mapGenre(raw, meta = null) {
+    const parts = [raw || ''];
+    if (meta) {
+      if (meta.title) parts.push(meta.title);
+      if (meta.author) parts.push(meta.author);
+      if (meta.summary) parts.push(meta.summary.slice(0, 180));
+    }
+    const text = parts.join(' ').toLowerCase();
     for (const [genre, keys] of GENRE_KEYWORDS) {
       if (keys.some((k) => text.includes(k))) return genre;
     }
-    return '小说';
+    return '文学小说';
   }
 
   async function searchOnlineBooks(query) {
@@ -1746,10 +1809,12 @@
       const coverUrl = art ? art.replace(/\/\d+x\d+bb\./, '/400x400bb.') : '';
       const rawDesc = stripHtml(d.description || '');
       const summary = rawDesc.length > 260 ? `${rawDesc.slice(0, 260)}…` : rawDesc;
+      const title = d.trackName || '';
+      const author = d.artistName || '佚名';
       return {
-        title: d.trackName || '',
-        author: d.artistName || '佚名',
-        genre: mapGenre((d.genres || []).join(' ')),
+        title,
+        author,
+        genre: mapGenre((d.genres || []).join(' '), { title, author, summary }),
         pages: 0,
         wordsWan: 0,
         summary,
@@ -1767,13 +1832,16 @@
       const img = (v.imageLinks && (v.imageLinks.thumbnail || v.imageLinks.smallThumbnail)) || '';
       const ids = Array.isArray(v.industryIdentifiers) ? v.industryIdentifiers : [];
       const isbnObj = ids.find((x) => x.type === 'ISBN_13') || ids.find((x) => x.type === 'ISBN_10');
+      const title = (v.title || '') + (v.subtitle ? `：${v.subtitle}` : '');
+      const author = Array.isArray(v.authors) ? v.authors.join(' / ') : '佚名';
+      const summary = stripHtml(v.description || '');
       return {
-        title: (v.title || '') + (v.subtitle ? `：${v.subtitle}` : ''),
-        author: Array.isArray(v.authors) ? v.authors.join(' / ') : '佚名',
-        genre: mapGenre((v.categories || []).join(' ')),
+        title,
+        author,
+        genre: mapGenre((v.categories || []).join(' '), { title, author, summary }),
         pages,
         wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
-        summary: stripHtml(v.description || ''),
+        summary,
         coverUrl: img ? img.replace(/^http:/, 'https:').replace(/&edge=curl/, '') : '',
         isbn: isbnObj ? isbnObj.identifier : '',
       };
@@ -1787,13 +1855,15 @@
       const pages = num(d.number_of_pages_median, 0);
       const isbns = Array.isArray(d.isbn) ? d.isbn : [];
       const isbn = isbns.find((x) => String(x).length === 13) || isbns[0] || '';
+      const author = (d.author_name || ['佚名']).slice(0, 2).join(' / ');
+      const summary = Array.isArray(d.first_sentence) ? d.first_sentence[0] : (d.first_sentence || '');
       return {
         title: d.title,
-        author: (d.author_name || ['佚名']).slice(0, 2).join(' / '),
-        genre: mapGenre((d.subject || []).slice(0, 4).join(' ')),
+        author,
+        genre: mapGenre((d.subject || []).slice(0, 4).join(' '), { title: d.title, author, summary }),
         pages,
         wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
-        summary: Array.isArray(d.first_sentence) ? d.first_sentence[0] : (d.first_sentence || ''),
+        summary,
         coverUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : '',
         isbn,
       };
@@ -1810,7 +1880,7 @@
       return {
         title: d.title || '',
         author: authors,
-        genre: mapGenre(subjects),
+        genre: mapGenre(subjects, { title: d.title, author: authors, summary: subjects }),
         pages: 0,
         wordsWan: 0,
         summary: subjects ? `Project Gutenberg 开源公版名著 · 主题：${subjects}` : 'Project Gutenberg 开源公版名著',
