@@ -3853,6 +3853,26 @@ ${libraryDigest() || '（暂无）'}
     await setMeta('demoPurgedV3', true);
   }
 
+  function hideSafariGuideIfNative() {
+    if (bridge.available) {
+      document.documentElement.classList.add('native-shell');
+      $('#safariInstallGuideCard')?.classList.add('hidden');
+      $('#installBanner')?.classList.add('hidden');
+    }
+  }
+
+  function maybeShowInstallBanner() {
+    if (bridge.available) return;
+    const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
+    const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
+    if (!isIOS || isStandalone || kvGet('hideInstallBanner', false)) return;
+    $('#installBanner')?.classList.remove('hidden');
+    $('#closeInstallBanner')?.addEventListener('click', () => {
+      $('#installBanner')?.classList.add('hidden');
+      kvSet('hideInstallBanner', true);
+    });
+  }
+
   function registerSW() {
     if (!('serviceWorker' in navigator)) return;
     if (!/^https?:$/.test(location.protocol)) return;
