@@ -377,6 +377,7 @@
     formColor: (window.SPINE_COLORS || ['#2F6354'])[0],
     formGenre: (window.BOOK_GENRES || ['小说'])[0],
     searchResults: [],
+    searchSeq: 0,
     dailyOffset: 0,
     dailyQuotes: [],
     recommendations: [],
@@ -1224,6 +1225,7 @@
     const listEl = $('#onlineBookList');
     if (!q) { status.textContent = '请输入书名、作者或 ISBN'; return; }
 
+    const searchToken = ++state.searchSeq;
     const lower = q.toLowerCase();
     const localHits = (window.CURATED_BOOKS || []).filter((b) => (
       b.title.toLowerCase().includes(lower)
@@ -1232,30 +1234,57 @@
       || (b.summary || '').toLowerCase().includes(lower)
     )).map((b) => ({ ...b, local: true }));
 
-    // 本地精选库命中时立即展示，联网结果稍后追加
-    state.searchResults = localHits;
+    // 本地精选库命中时立即展示，联网结果增量追加
+    let onlineList = [];
+    const sources = new Set();
+    if (localHits.length) sources.add('内置精选书库');
+
+    const applyMerged = (done) => {
+      if (state.searchSeq !== searchToken) return;
+      const merged = mergeResults(localHits, onlineList);
+      state.searchResults = merged;
+      if (merged.length) {
+        const srcText = [...sources].join(' + ');
+        status.textContent = done
+          ? `${srcText ? `来源：${srcText} · ` : ''}仅含封面、简介、页数与估算字数（共 ${merged.length} 条）`
+          : `已获取 ${merged.length} 条（${srcText}）· 正在补充更多版本…`;
+        renderOnlineResults(merged);
+      } else if (done) {
+        status.textContent = '没有找到结果，试试更简短的书名或作者，也可以手动录入。';
+        listEl.innerHTML = '<div class="search-empty">没有匹配的书籍，可直接「手动录入」。</div>';
+      }
+    };
+
     if (localHits.length) {
-      status.textContent = `精选库命中 ${localHits.length} 本 · 正在联网补充更多版本…`;
-      renderOnlineResults(localHits);
+      applyMerged(false);
     } else {
-      status.textContent = `正在检索「${q}」…`;
+      status.textContent = `正在联网检索「${q}」…`;
       listEl.innerHTML = '<div class="search-skeleton">正在联网获取书籍信息…</div>';
     }
 
-    const online = await fetchOnlineBooks(q);
-    const merged = mergeResults(localHits, online.list);
-    const sourceText = [online.source, localHits.length ? '内置精选书库' : ''].filter(Boolean).join(' + ');
+    // Apple Books（国内直连快）与 Google Books 并行，谁先回来立刻渲染
+    const handleSource = (p) => p.then((res) => {
+      if (state.searchSeq !== searchToken) return;
+      if (res && res.list && res.list.length) {
+        onlineList = onlineList.concat(res.list);
+        if (res.source) sources.add(res.source);
+        applyMerged(false);
+      }
+    }).catch(() => {});
 
-    if (!merged.length) {
-      status.textContent = '没有找到结果，试试更简短的书名或作者，也可以手动录入。';
-      listEl.innerHTML = '<div class="search-empty">没有匹配的书籍，可直接「手动录入」。</div>';
-      state.searchResults = [];
-      return;
+    await Promise.all([
+      handleSource(fetchAppleBooks(q)),
+      handleSource(fetchGoogleBooks(q)),
+    ]);
+
+    if (state.searchSeq !== searchToken) return;
+
+    // 两个主源都没有在线结果时，再回落 Open Library
+    if (!onlineList.length) {
+      await handleSource(fetchOpenLibrary(q));
     }
 
-    state.searchResults = merged;
-    status.textContent = `${sourceText ? `来源：${sourceText} · ` : ''}仅含封面、简介、页数与估算字数（共 ${merged.length} 条）`;
-    renderOnlineResults(merged);
+    applyMerged(true);
   }
 
   function mergeResults(local, online) {
@@ -1294,45 +1323,76 @@
       </div>`).join('');
   }
 
-  async function fetchOnlineBooks(q) {
-    const timeout = 6500;
-    try {
-      const data = await requestJson(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=12&printType=books`, { timeout });
-      const list = (data.items || []).map((it) => {
-        const v = it.volumeInfo || {};
-        const pages = num(v.pageCount, 0);
-        const img = (v.imageLinks && (v.imageLinks.thumbnail || v.imageLinks.smallThumbnail)) || '';
-        return {
-          title: (v.title || '') + (v.subtitle ? `：${v.subtitle}` : ''),
-          author: Array.isArray(v.authors) ? v.authors.join(' / ') : '佚名',
-          genre: mapGenre((v.categories || []).join(' ')),
-          pages,
-          wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
-          summary: v.description || '',
-          coverUrl: img ? img.replace(/^http:/, 'https:').replace(/&edge=curl/, '') : '',
-        };
-      }).filter((x) => x.title);
-      if (list.length) return { list, source: 'Google Books' };
-    } catch { /* try next source */ }
+  function stripHtml(html) {
+    if (!html) return '';
+    return String(html)
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
 
-    try {
-      const data = await requestJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&limit=12&fields=title,author_name,number_of_pages_median,first_sentence,cover_i,subject`, { timeout });
-      const list = (data.docs || []).map((d) => {
-        const pages = num(d.number_of_pages_median, 0);
-        return {
-          title: d.title,
-          author: (d.author_name || ['佚名']).slice(0, 2).join(' / '),
-          genre: mapGenre((d.subject || []).slice(0, 4).join(' ')),
-          pages,
-          wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
-          summary: Array.isArray(d.first_sentence) ? d.first_sentence[0] : (d.first_sentence || ''),
-          coverUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : '',
-        };
-      }).filter((x) => x.title);
-      return { list, source: 'Open Library' };
-    } catch { /* offline */ }
+  async function fetchAppleBooks(q, timeout = 5500) {
+    const data = await requestJson(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=ebook&limit=12`, { timeout });
+    const list = (data.results || []).map((d) => {
+      const art = d.artworkUrl100 || d.artworkUrl60 || '';
+      const coverUrl = art ? art.replace(/\/\d+x\d+bb\./, '/400x400bb.') : '';
+      const rawDesc = stripHtml(d.description || '');
+      const summary = rawDesc.length > 260 ? `${rawDesc.slice(0, 260)}…` : rawDesc;
+      return {
+        title: d.trackName || '',
+        author: d.artistName || '佚名',
+        genre: mapGenre((d.genres || []).join(' ')),
+        pages: 0,
+        wordsWan: 0,
+        summary,
+        coverUrl,
+      };
+    }).filter((x) => x.title);
+    return { list, source: list.length ? 'Apple Books' : '' };
+  }
 
-    return { list: [], source: '' };
+  async function fetchGoogleBooks(q, timeout = 4500) {
+    const data = await requestJson(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=10&printType=books`, { timeout });
+    const list = (data.items || []).map((it) => {
+      const v = it.volumeInfo || {};
+      const pages = num(v.pageCount, 0);
+      const img = (v.imageLinks && (v.imageLinks.thumbnail || v.imageLinks.smallThumbnail)) || '';
+      return {
+        title: (v.title || '') + (v.subtitle ? `：${v.subtitle}` : ''),
+        author: Array.isArray(v.authors) ? v.authors.join(' / ') : '佚名',
+        genre: mapGenre((v.categories || []).join(' ')),
+        pages,
+        wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
+        summary: stripHtml(v.description || ''),
+        coverUrl: img ? img.replace(/^http:/, 'https:').replace(/&edge=curl/, '') : '',
+      };
+    }).filter((x) => x.title);
+    return { list, source: list.length ? 'Google Books' : '' };
+  }
+
+  async function fetchOpenLibrary(q, timeout = 4500) {
+    const data = await requestJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&limit=10&fields=title,author_name,number_of_pages_median,first_sentence,cover_i,subject`, { timeout });
+    const list = (data.docs || []).map((d) => {
+      const pages = num(d.number_of_pages_median, 0);
+      return {
+        title: d.title,
+        author: (d.author_name || ['佚名']).slice(0, 2).join(' / '),
+        genre: mapGenre((d.subject || []).slice(0, 4).join(' ')),
+        pages,
+        wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
+        summary: Array.isArray(d.first_sentence) ? d.first_sentence[0] : (d.first_sentence || ''),
+        coverUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : '',
+      };
+    }).filter((x) => x.title);
+    return { list, source: list.length ? 'Open Library' : '' };
   }
 
   /* =============================== 书籍详情 =============================== */
