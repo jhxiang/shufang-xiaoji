@@ -1494,36 +1494,86 @@
       listEl.innerHTML = '<div class="search-skeleton">正在联网获取书籍信息…</div>';
     }
 
-    // Apple Books（国内直连快）与 Google Books 并行，谁先回来立刻渲染
+    // 按查询意图路由：ISBN 精准查询 / 英文 4 源并行 / 中文 Apple+Google 优先并增量补源
+    const isbn = parseIsbn(q);
+    const isCJK = hasCJK(q);
     const handleSource = (p) => p.then((res) => {
       if (state.searchSeq !== searchToken) return;
       if (res && res.list && res.list.length) {
-        onlineList = onlineList.concat(res.list);
+        const tagged = res.list.map((item, idx) => ({
+          ...item,
+          _source: res.source || 'online',
+          _rank: idx + 1,
+        }));
+        onlineList = onlineList.concat(tagged);
         if (res.source) sources.add(res.source);
         applyMerged(false);
       }
     }).catch(() => {});
 
-    await Promise.all([
-      handleSource(fetchAppleBooks(q)),
-      handleSource(fetchGoogleBooks(q)),
-    ]);
-
-    if (state.searchSeq !== searchToken) return;
-
-    // 两个主源结果偏少时，补充 Open Library（支持 mode=everything）与开源 Gutendex 公版书库
-    if (onlineList.length < 4) {
+    if (isbn) {
+      await Promise.all([
+        handleSource(fetchGoogleBooks(`isbn:${isbn}`)),
+        handleSource(fetchOpenLibrary(`isbn:${isbn}`)),
+        handleSource(fetchAppleBooks(isbn)),
+      ]);
+    } else if (!isCJK) {
+      // 英文/外文查询：4 源直接并行，RRF 融合排序
       await Promise.all([
         handleSource(fetchOpenLibrary(q)),
+        handleSource(fetchGoogleBooks(q)),
+        handleSource(fetchAppleBooks(q)),
         handleSource(fetchGutendex(q)),
       ]);
+    } else {
+      // 中文查询：Apple Books（国内直连快）与 Google Books 优先并行
+      await Promise.all([
+        handleSource(fetchAppleBooks(q)),
+        handleSource(fetchGoogleBooks(q)),
+      ]);
+      if (state.searchSeq !== searchToken) return;
+      if (onlineList.length < 6) {
+        await Promise.all([
+          handleSource(fetchOpenLibrary(q)),
+          handleSource(fetchGutendex(q)),
+        ]);
+      }
     }
 
+    if (state.searchSeq !== searchToken) return;
     applyMerged(true);
   }
 
   function hasCJK(str) {
     return /[\u4e00-\u9fff]/.test(String(str || ''));
+  }
+
+  function parseIsbn(str) {
+    const clean = String(str || '').replace(/[-\s]/g, '').toUpperCase();
+    return /^(97[89]\d{10}|\d{9}[\dX])$/.test(clean) ? clean : '';
+  }
+
+  function diceSimilarity(a, b) {
+    const s1 = String(a || '').toLowerCase().replace(/\s+/g, '');
+    const s2 = String(b || '').toLowerCase().replace(/\s+/g, '');
+    if (!s1 || !s2) return 0;
+    if (s1 === s2) return 1;
+    if (s1.length < 2 || s2.length < 2) return s1.includes(s2) || s2.includes(s1) ? 0.8 : 0;
+    const bigrams = new Map();
+    for (let i = 0; i < s1.length - 1; i++) {
+      const bg = s1.slice(i, i + 2);
+      bigrams.set(bg, (bigrams.get(bg) || 0) + 1);
+    }
+    let inter = 0;
+    for (let i = 0; i < s2.length - 1; i++) {
+      const bg = s2.slice(i, i + 2);
+      const cnt = bigrams.get(bg) || 0;
+      if (cnt > 0) {
+        inter++;
+        bigrams.set(bg, cnt - 1);
+      }
+    }
+    return (2 * inter) / ((s1.length - 1) + (s2.length - 1));
   }
 
   function normalizeTitleKey(title) {
@@ -1536,6 +1586,7 @@
 
   function scoreSearchItem(item, query) {
     const q = String(query || '').trim().toLowerCase();
+    const qIsbn = parseIsbn(q);
     const qNorm = normalizeTitleKey(q);
     const title = String(item.title || '').toLowerCase();
     const tNorm = normalizeTitleKey(title);
@@ -1543,15 +1594,25 @@
     const summary = String(item.summary || '').toLowerCase();
     const queryIsCJK = hasCJK(q);
 
-    let score = 0;
-    if (tNorm === qNorm && qNorm) score += 120;
-    else if (qNorm && tNorm.startsWith(qNorm)) score += 72;
-    else if (qNorm && tNorm.includes(qNorm)) score += 42;
-    else if (q && title.includes(q)) score += 34;
+    // 1. RRF 倒数排名融合分（多源共同命中的同一本书自动获得叠加信任分）
+    let score = (item._rrfScore || 0) * 1800;
 
-    if (q && author.includes(q)) score += 32;
-    if (q && summary.includes(q)) score += 10;
+    // 2. ISBN 精确命中最高置信度
+    if (qIsbn && item.isbn && item.isbn === qIsbn) score += 160;
 
+    // 3. 标题 & 作者 Dice Bigram 相似度 + 精确/前缀命中
+    const titleDice = diceSimilarity(tNorm, qNorm);
+    const authorDice = diceSimilarity(author, q);
+    score += titleDice * 65 + authorDice * 35;
+
+    if (tNorm === qNorm && qNorm) score += 90;
+    else if (qNorm && tNorm.startsWith(qNorm)) score += 45;
+    else if (qNorm && tNorm.includes(qNorm)) score += 24;
+
+    if (q && author.includes(q)) score += 24;
+    if (q && summary.includes(q)) score += 8;
+
+    // 4. 语言匹配偏好
     if (queryIsCJK) {
       if (hasCJK(item.title)) score += 24;
       else score -= 24;
@@ -1559,11 +1620,12 @@
       if (hasCJK(item.author)) score += 6;
     }
 
-    // 导读/解读/习题等衍生读物降权，让原著排前面
+    // 5. 导读/解读/习题等衍生读物降权，让原著排前面
     if (/(导读|解读|精读|拆书|伴读|书评|习题|测试|试卷|考点|合集|名师)/.test(item.title || '')) {
-      score -= 22;
+      score -= 24;
     }
 
+    // 6. 元数据完整度加成
     if (item.local) score += 16;
     if (item.coverUrl) score += 14;
     if (item.pages) score += 6;
@@ -1573,16 +1635,38 @@
 
   function mergeResults(local, online, query = '') {
     const byKey = new Map();
+    const isbnToKey = new Map();
     const queryIsCJK = hasCJK(query);
+    const RRF_K = 60;
+    const SOURCE_WEIGHT = {
+      '内置精选书库': 1.25,
+      'Apple Books': queryIsCJK ? 1.2 : 1.0,
+      'Google Books': 1.1,
+      'Open Library': queryIsCJK ? 0.95 : 1.15,
+      'Gutendex 公版库': 0.9,
+    };
 
-    const ingest = (raw) => {
+    const ingest = (raw, fallbackRank) => {
       if (!raw || !raw.title) return;
-      const key = normalizeTitleKey(raw.title) || `${raw.title}|${raw.author}`.toLowerCase();
+      const isbn = raw.isbn ? parseIsbn(raw.isbn) : '';
+      const titleKey = normalizeTitleKey(raw.title) || `${raw.title}|${raw.author}`.toLowerCase();
+      // 优先按 ISBN 聚类，其次按归一化书名聚类
+      const key = (isbn && isbnToKey.get(isbn)) || titleKey;
+      if (isbn && !isbnToKey.has(isbn)) isbnToKey.set(isbn, key);
+
+      const src = raw._source || (raw.local ? '内置精选书库' : 'online');
+      const rank = raw._rank || fallbackRank || 1;
+      const rrfDelta = (SOURCE_WEIGHT[src] || 1) / (RRF_K + rank);
+
       const prev = byKey.get(key);
       if (!prev) {
-        byKey.set(key, { ...raw });
+        byKey.set(key, { ...raw, isbn, _rrfScore: rrfDelta, _sources: new Set([src]) });
         return;
       }
+      prev._rrfScore = (prev._rrfScore || 0) + rrfDelta;
+      prev._sources.add(src);
+      if (!prev.isbn && isbn) prev.isbn = isbn;
+
       // 跨书源字段智能融合：保留最优封面、最完整简介、真实页数/字数与匹配语言的作者名
       if (!prev.coverUrl && raw.coverUrl) prev.coverUrl = raw.coverUrl;
       else if (prev.coverUrl && raw.coverUrl && raw.coverUrl.includes('mzstatic.com') && !prev.coverUrl.includes('mzstatic.com')) {
@@ -1605,8 +1689,8 @@
       if (raw.local) prev.local = true;
     };
 
-    local.forEach(ingest);
-    online.forEach(ingest);
+    local.forEach((item, i) => ingest(item, i + 1));
+    online.forEach((item, i) => ingest(item, i + 1));
 
     return [...byKey.values()]
       .sort((a, b) => scoreSearchItem(b, query) - scoreSearchItem(a, query))
@@ -1681,6 +1765,8 @@
       const v = it.volumeInfo || {};
       const pages = num(v.pageCount, 0);
       const img = (v.imageLinks && (v.imageLinks.thumbnail || v.imageLinks.smallThumbnail)) || '';
+      const ids = Array.isArray(v.industryIdentifiers) ? v.industryIdentifiers : [];
+      const isbnObj = ids.find((x) => x.type === 'ISBN_13') || ids.find((x) => x.type === 'ISBN_10');
       return {
         title: (v.title || '') + (v.subtitle ? `：${v.subtitle}` : ''),
         author: Array.isArray(v.authors) ? v.authors.join(' / ') : '佚名',
@@ -1689,15 +1775,18 @@
         wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
         summary: stripHtml(v.description || ''),
         coverUrl: img ? img.replace(/^http:/, 'https:').replace(/&edge=curl/, '') : '',
+        isbn: isbnObj ? isbnObj.identifier : '',
       };
     }).filter((x) => x.title);
     return { list, source: list.length ? 'Google Books' : '' };
   }
 
   async function fetchOpenLibrary(q, timeout = 4500) {
-    const data = await requestJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&mode=everything&limit=10&fields=title,author_name,number_of_pages_median,first_sentence,cover_i,subject`, { timeout });
+    const data = await requestJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&mode=everything&limit=10&fields=title,author_name,number_of_pages_median,first_sentence,cover_i,subject,isbn`, { timeout });
     const list = (data.docs || []).map((d) => {
       const pages = num(d.number_of_pages_median, 0);
+      const isbns = Array.isArray(d.isbn) ? d.isbn : [];
+      const isbn = isbns.find((x) => String(x).length === 13) || isbns[0] || '';
       return {
         title: d.title,
         author: (d.author_name || ['佚名']).slice(0, 2).join(' / '),
@@ -1706,6 +1795,7 @@
         wordsWan: pages ? +(pages * 0.065).toFixed(1) : 0,
         summary: Array.isArray(d.first_sentence) ? d.first_sentence[0] : (d.first_sentence || ''),
         coverUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : '',
+        isbn,
       };
     }).filter((x) => x.title);
     return { list, source: list.length ? 'Open Library' : '' };
@@ -2849,32 +2939,65 @@
     const bookMins = new Map();
     (state.sessions || []).forEach((s) => {
       if (!s.bookId) return;
-      bookMins.set(s.bookId, (bookMins.get(s.bookId) || 0) + (num(s.durationSec, 0) / 60));
+      const mins = s.minutes != null ? num(s.minutes, 0) : (num(s.durationSec, 0) / 60);
+      bookMins.set(s.bookId, (bookMins.get(s.bookId) || 0) + mins);
     });
+    // 按用户自身平均阅读时长归一化，防止单本挂机时长垄断画像
+    const loggedMins = [...bookMins.values()].filter((m) => m > 0);
+    const avgBookMins = loggedMins.length ? (loggedMins.reduce((a, b) => a + b, 0) / loggedMins.length) : 60;
+
     const genreScore = new Map();
     const authorScore = new Map();
-    const recentCutoff = Date.now() - 14 * 86400 * 1000;
+    const now = Date.now();
+    let prefWordsSum = 0, prefWordsCnt = 0;
+
     state.books.forEach((b) => {
-      const statusW = b.status === 'finished' ? 2.2 : (b.status === 'reading' ? 1.5 : 0.9);
-      const ratingW = (b.rating || 0) * 0.55;
-      const timeW = Math.min(2.5, (bookMins.get(b.id) || 0) / 90);
-      const recentW = (b.lastReadAt && b.lastReadAt >= recentCutoff) ? 0.6 : 0;
-      const w = statusW + ratingW + timeW + recentW;
+      const ageDays = Math.max(0, (now - (b.lastReadAt || b.updatedAt || b.createdAt || now)) / 86400000);
+      // 指数时间衰减：高分书半衰期 365 天，普通书 180 天
+      const halfLife = (b.rating || 0) >= 4.5 ? 365 : 180;
+      const timeDecay = Math.pow(0.5, ageDays / halfLife);
+
+      // 显式评分非线性加成 + 低分负反馈（<= 2 星降低同类权重）
+      let ratingW = 0;
+      if (b.rating > 0) {
+        if (b.rating <= 2) ratingW = -1.2;
+        else if (b.rating >= 4.5) ratingW = 3.2;
+        else ratingW = (b.rating - 2.5) * 1.1;
+      }
+
+      const statusW = b.status === 'finished' ? 2.0 : (b.status === 'reading' ? 1.4 : 0.6);
+      const normMins = Math.min(2.4, (bookMins.get(b.id) || 0) / Math.max(30, avgBookMins));
+      const w = (statusW + ratingW + normMins) * (0.35 + 0.65 * timeDecay);
+
       genreScore.set(b.genre, (genreScore.get(b.genre) || 0) + w);
       if (b.author && b.author !== '佚名') {
-        authorScore.set(b.author, (authorScore.get(b.author) || 0) + w * 0.85);
+        authorScore.set(b.author, (authorScore.get(b.author) || 0) + w * 0.9);
+      }
+      if (w > 1.5 && b.wordsWan > 0) {
+        prefWordsSum += b.wordsWan;
+        prefWordsCnt++;
       }
     });
-    const sortedGenres = [...genreScore.entries()].sort((a, b) => b[1] - a[1]);
-    const sortedAuthors = [...authorScore.entries()].sort((a, b) => b[1] - a[1]);
-    return { genreScore, authorScore, sortedGenres, sortedAuthors };
+
+    const sortedGenres = [...genreScore.entries()].filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]);
+    const sortedAuthors = [...authorScore.entries()].filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]);
+    const prefWordsWan = prefWordsCnt ? (prefWordsSum / prefWordsCnt) : 20;
+    return { genreScore, authorScore, sortedGenres, sortedAuthors, prefWordsWan };
+  }
+
+  function bookPairSimilarity(a, b) {
+    let sim = 0;
+    if (a.author && b.author && a.author === b.author) sim += 0.65;
+    if (a.genre && b.genre && a.genre === b.genre) sim += 0.35;
+    return Math.min(1, sim);
   }
 
   function computeRecommendations() {
     const owned = new Set(state.books.map((b) => `${b.title}|${b.author}`.toLowerCase()));
-    const ownedTitles = new Set(state.books.map((b) => b.title.toLowerCase()));
-    const { genreScore, authorScore, sortedGenres, sortedAuthors } = computeUserTaste();
+    const ownedTitles = new Set(state.books.map((b) => normalizeTitleKey(b.title)));
+    const { genreScore, authorScore, sortedGenres, sortedAuthors, prefWordsWan } = computeUserTaste();
     const finishedGenres = new Set(state.books.filter((b) => b.status === 'finished').map((b) => b.genre));
+    const ownedGenres = new Set(state.books.map((b) => b.genre));
     const topGenre = sortedGenres[0]?.[0] || '';
     const topAuthor = sortedAuthors[0]?.[0] || '';
 
@@ -2882,36 +3005,75 @@
     const poolMap = new Map();
     [...(window.CURATED_BOOKS || []), ...(state.onlineRecs || [])].forEach((b) => {
       if (!b || !b.title) return;
-      const tk = b.title.toLowerCase();
+      const tk = normalizeTitleKey(b.title);
       if (ownedTitles.has(tk) || owned.has(`${b.title}|${b.author}`.toLowerCase())) return;
       if (!poolMap.has(tk)) poolMap.set(tk, b);
     });
 
     const daySeed = `${dateKey()}#${state.dailyOffset}`;
-    const candidates = [...poolMap.values()].map((b) => {
-      let score = (genreScore.get(b.genre) || 0) * 1.45 + (authorScore.get(b.author) || 0) * 1.2;
-      if (finishedGenres.has(b.genre)) score += 1.2;
-      if (b.fromOnline) score += 0.9; // 鼓励发掘书库之外的新书
-      if (!state.books.length) score += (b.wordsWan && b.wordsWan < 25 ? 1.4 : 0.4);
-      // 每日 + 换一批的确定性扰动，让每次「换一批」都有新面孔
-      score += hashStr(`${daySeed}|${b.title}`) * 1.6;
+    const scoredPool = [...poolMap.values()].map((b) => {
+      let rel = (genreScore.get(b.genre) || 0) * 1.45 + (authorScore.get(b.author) || 0) * 1.25;
+      if (finishedGenres.has(b.genre)) rel += 1.0;
+      if (b.wordsWan > 0 && state.books.length) {
+        const lenDist = Math.abs(Math.log10(Math.max(1, b.wordsWan)) - Math.log10(Math.max(1, prefWordsWan)));
+        rel += Math.max(0, 0.8 - lenDist);
+      }
+      if (b.fromOnline) rel += 0.9;
+      if (!state.books.length) rel += (b.wordsWan && b.wordsWan < 25 ? 1.4 : 0.4);
+      rel += hashStr(`${daySeed}|${b.title}`) * 1.5;
 
       let reason = b.onlineReason || '';
       if (!reason) {
-        if (topAuthor && b.author === topAuthor) reason = `你花了不少时间读 ${topAuthor} 的作品`;
-        else if (authorScore.get(b.author)) reason = `你读过 ${b.author} 的作品`;
-        else if (topGenre && b.genre === topGenre) reason = `契合你在「${b.genre}」的阅读时长与高分偏好`;
+        if (topAuthor && b.author === topAuthor) reason = `契合你对 ${topAuthor} 的高分与长时投入`;
+        else if ((authorScore.get(b.author) || 0) > 0) reason = `你读过 ${b.author} 的作品`;
+        else if (topGenre && b.genre === topGenre) reason = `契合你在「${b.genre}」的阅读时长与评分画像`;
         else if (finishedGenres.has(b.genre)) reason = `你读完过同题材好书 · ${b.genre}`;
         else if (b.wordsWan && b.wordsWan <= 14) reason = '篇幅轻巧，适合这几天开读';
         else reason = '高口碑经典，值得放进书房';
       }
-      return { ...b, reason, score };
-    }).sort((a, b) => b.score - a.score).slice(0, 4);
+      return { ...b, reason, rel };
+    });
 
-    if (!candidates.length) {
+    if (!scoredPool.length) {
       return (window.CURATED_BOOKS || []).slice(0, 3).map((b) => ({ ...b, reason: '书房经典，随时可以重读' }));
     }
-    return candidates;
+
+    // 归一化相关性到 [0, 1]，使用 MMR（最大边际相关性，λ=0.72）挑选前 3 本，保证精准且不重复
+    const maxRel = Math.max(...scoredPool.map((x) => x.rel));
+    const minRel = Math.min(...scoredPool.map((x) => x.rel));
+    const span = Math.max(0.001, maxRel - minRel);
+    const remaining = scoredPool.map((x) => ({ ...x, normRel: (x.rel - minRel) / span }));
+
+    const picked = [];
+    const LAMBDA = 0.72;
+    const exploitCount = Math.min(3, remaining.length);
+    for (let k = 0; k < exploitCount; k++) {
+      let bestIdx = 0;
+      let bestMmr = -Infinity;
+      for (let i = 0; i < remaining.length; i++) {
+        const cand = remaining[i];
+        const maxSim = picked.length ? Math.max(...picked.map((p) => bookPairSimilarity(cand, p))) : 0;
+        const mmr = LAMBDA * cand.normRel - (1 - LAMBDA) * maxSim;
+        if (mmr > bestMmr) { bestMmr = mmr; bestIdx = i; }
+      }
+      picked.push(remaining.splice(bestIdx, 1)[0]);
+    }
+
+    // 第 4 本：探索位（Explore），优先从用户未读过的题材中挑高口碑书打破信息茧房
+    if (remaining.length) {
+      const pickedGenres = new Set(picked.map((p) => p.genre));
+      const exploreCands = remaining.filter((c) => !ownedGenres.has(c.genre) && !pickedGenres.has(c.genre));
+      const pool = exploreCands.length ? exploreCands : remaining.filter((c) => !pickedGenres.has(c.genre));
+      const pickFrom = pool.length ? pool : remaining;
+      pickFrom.sort((a, b) => hashStr(`${daySeed}|exp|${b.title}`) - hashStr(`${daySeed}|exp|${a.title}`));
+      const expBook = pickFrom[0];
+      picked.push({
+        ...expBook,
+        reason: exploreCands.length ? `跨界探索 · 尝试「${expBook.genre}」换换口味` : expBook.reason,
+      });
+    }
+
+    return picked;
   }
 
   async function maybeFetchOnlineRecommendations() {
