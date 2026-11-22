@@ -3140,6 +3140,63 @@ html.native-shell .sheet-body {
   }
 }
 
+/* 洞察页自定义计划子进度条 */
+.plan-sub-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.plan-sub-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plan-sub-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.plan-sub-row strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-sub-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.06));
+  overflow: hidden;
+}
+
+.plan-sub-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+
+.plan-sub-fill.warm {
+  background: #D48446;
+}
+
+.my-quote-tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--primary-soft, rgba(47, 99, 84, 0.1));
+  color: var(--primary);
+  margin-left: 6px;
+}
+
 /* 书脊在长按/点击时不要弹出上下文菜单 */
 .book-spine,
 .book-cover-box,

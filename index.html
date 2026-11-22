@@ -140,10 +140,23 @@
             <h2>每日拾页</h2>
             <small id="dailyDateLabel">今日 5 条精华摘录</small>
           </div>
-          <button type="button" class="text-link-btn" id="refreshDailyBtn">换一批</button>
+          <div style="display:flex;align-items:center;gap:10px">
+            <button type="button" class="btn btn-soft btn-sm" id="openQuoteCollectorBtn">+ 收录金句</button>
+            <button type="button" class="text-link-btn" id="refreshDailyBtn">换一批</button>
+          </div>
         </div>
 
         <div class="quote-stack" id="dailyQuotesList"></div>
+
+        <!-- My Collected Golden Quotes -->
+        <div class="section-header" style="margin-top:24px">
+          <div>
+            <h2>我的金句收录</h2>
+            <small id="myQuotesCountSub">已收录 0 条 · 自动参与每日拾页回顾</small>
+          </div>
+          <button type="button" class="text-link-btn" id="addQuoteInlineBtn">+ 新增一条</button>
+        </div>
+        <div class="quote-stack" id="myQuotesList"></div>
 
         <div class="section-header" style="margin-top:24px">
           <div>
@@ -184,6 +197,7 @@
               <button type="button" class="text-link-btn" id="editGoalBtn">调整</button>
             </div>
             <p class="goal-sub" id="streakSubText">连续阅读 0 天 · 今日 0 分钟</p>
+            <div class="plan-sub-bars" id="planSubBars"></div>
             <div class="persona-badges" id="personaBadges"></div>
           </div>
         </div>
@@ -371,7 +385,7 @@
           </ol>
         </div>
 
-        <!-- Demo & Reset -->
+        <!-- Reset -->
         <div class="settings-card">
           <div class="settings-card-head">
             <div class="settings-icon warm">
@@ -380,12 +394,11 @@
               </svg>
             </div>
             <div>
-              <h3>体验数据与管理</h3>
-              <p>导入示例书架（含人物图谱与阅读记录）或清空重置</p>
+              <h3>数据重置</h3>
+              <p>清空本机所有藏书、笔记与阅读记录（建议先导出备份）</p>
             </div>
           </div>
           <div class="settings-btn-stack">
-            <button type="button" class="btn btn-secondary btn-block" id="loadDemoBooksBtn">导入 4 本示例好书体验</button>
             <button type="button" class="btn btn-danger btn-block" id="clearAllBtn">清空全部本地数据</button>
           </div>
         </div>
@@ -797,6 +810,112 @@
       <div class="sheet-footer">
         <button type="button" class="btn btn-secondary" id="copyPosterQuoteBtn" style="flex:0.9">复制文字</button>
         <button type="button" class="btn btn-primary" id="savePosterBtn" style="flex:1.3">保存 / 分享图片</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sheet 8: Custom Reading Plan -->
+  <div class="sheet-backdrop" id="planBackdrop" role="dialog" aria-modal="true" aria-labelledby="planSheetTitle">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h3 id="planSheetTitle">自定义阅读计划</h3>
+        <button class="sheet-close" data-close-sheet="planBackdrop" type="button" aria-label="关闭">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sheet-body">
+        <div class="form-group">
+          <label class="form-label" for="planTitleInput"><span>计划名称 / 年度寄语</span></label>
+          <input id="planTitleInput" class="form-control" type="text" placeholder="如：2026 阅读计划 · 保持好奇" maxlength="32">
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label" for="planYearInput"><span>统计年份</span></label>
+            <input id="planYearInput" class="form-control" type="number" min="2020" max="2035" step="1">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="planBooksInput"><span>年度目标（本）</span></label>
+            <input id="planBooksInput" class="form-control" type="number" min="1" max="365" step="1" placeholder="24">
+          </div>
+        </div>
+        <div class="hot-tags" id="planBookPresets" style="margin:-4px 0 14px">
+          <button type="button" class="hot-tag" data-plan-books="12">12 本/年</button>
+          <button type="button" class="hot-tag" data-plan-books="24">24 本/年</button>
+          <button type="button" class="hot-tag" data-plan-books="36">36 本/年</button>
+          <button type="button" class="hot-tag" data-plan-books="52">52 本/年</button>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label" for="planDailyMinsInput"><span>每日时长目标（分钟）</span></label>
+            <input id="planDailyMinsInput" class="form-control" type="number" min="5" max="480" step="5" placeholder="30">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="planWeeklyDaysInput"><span>每周阅读天数（天）</span></label>
+            <input id="planWeeklyDaysInput" class="form-control" type="number" min="1" max="7" step="1" placeholder="5">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="planWordsInput"><span>年度阅读字数目标（万字，可选）</span></label>
+          <input id="planWordsInput" class="form-control" type="number" min="0" max="10000" step="10" placeholder="300">
+        </div>
+      </div>
+      <div class="sheet-footer">
+        <button type="button" class="btn btn-secondary" data-close-sheet="planBackdrop" style="flex:0.8">取消</button>
+        <button type="button" class="btn btn-primary" id="savePlanBtn" style="flex:1.2">保存计划</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sheet 9: Collect Golden Quote -->
+  <div class="sheet-backdrop" id="quoteEditorBackdrop" role="dialog" aria-modal="true" aria-labelledby="quoteEditorTitle">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h3 id="quoteEditorTitle">收录金句</h3>
+        <button class="sheet-close" data-close-sheet="quoteEditorBackdrop" type="button" aria-label="关闭">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sheet-body">
+        <div class="form-group">
+          <label class="form-label" for="quoteTextInput"><span>金句 / 书摘正文 *</span></label>
+          <textarea id="quoteTextInput" class="form-control" rows="4" placeholder="记下打动你的那句话…"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="quoteBookPick"><span>快速关联书架书籍（可选）</span></label>
+          <select id="quoteBookPick" class="form-control">
+            <option value="">不从书架选，直接手填书名与作者</option>
+          </select>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label" for="quoteBookInput"><span>出处书名</span></label>
+            <input id="quoteBookInput" class="form-control" type="text" placeholder="如：人间失格">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="quoteAuthorInput"><span>作者</span></label>
+            <input id="quoteAuthorInput" class="form-control" type="text" placeholder="如：太宰治">
+          </div>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label" for="quotePageInput"><span>页码 / 章节（可选）</span></label>
+            <input id="quotePageInput" class="form-control" type="text" placeholder="如：P.42">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="quoteTagInput"><span>标签（可选）</span></label>
+            <input id="quoteTagInput" class="form-control" type="text" placeholder="如：人生 / 文学 / 共鸣">
+          </div>
+        </div>
+      </div>
+      <div class="sheet-footer">
+        <button type="button" class="btn btn-secondary" data-close-sheet="quoteEditorBackdrop" style="flex:0.8">取消</button>
+        <button type="button" class="btn btn-primary" id="saveQuoteBtn" style="flex:1.2">收录到金句库</button>
       </div>
     </div>
   </div>

@@ -645,7 +645,6 @@
         <p>先把正在读或想读的书放上书架，<br>之后就能记录时长、写感悟、梳理人物关系。</p>
         <div class="empty-actions">
           <button class="btn btn-primary btn-sm" type="button" data-empty-act="add">+ 添加第一本书</button>
-          <button class="btn btn-soft btn-sm" type="button" data-empty-act="demo">导入示例书</button>
         </div>`;
       return;
     }
@@ -979,7 +978,6 @@
       const btn = e.target.closest('[data-empty-act]');
       if (!btn) return;
       if (btn.dataset.emptyAct === 'add') openAddSheet();
-      else if (btn.dataset.emptyAct === 'demo') loadDemoBooks();
       else if (btn.dataset.emptyAct === 'reset') {
         state.statusFilter = 'all';
         state.chipFilter = 'all';
@@ -2683,6 +2681,12 @@
 
   function quotePool() {
     const pool = (window.CURATED_QUOTES || []).map((q) => ({ ...q, own: false }));
+    const saved = getMeta('savedQuotes', []);
+    saved.forEach((s) => {
+      if (s && s.manual && String(s.text || '').trim().length >= 4) {
+        pool.push({ text: s.text.trim(), book: s.book || '随笔摘录', author: s.author || '佚名', genre: s.tag || '', own: true });
+      }
+    });
     state.books.forEach((b) => {
       (b.notes || []).forEach((n) => {
         if (n.type === 'quote' && String(n.content || '').trim().length >= 6) {
@@ -2745,7 +2749,75 @@
         </article>`;
       }).join('');
     }
+    renderMyQuotes();
     renderRecommendations();
+  }
+
+  function renderMyQuotes() {
+    const saved = getMeta('savedQuotes', []);
+    const sub = $('#myQuotesCountSub');
+    if (sub) sub.textContent = `已收录 ${saved.length} 条 · 自动参与每日拾页回顾`;
+    const listEl = $('#myQuotesList');
+    if (!listEl) return;
+    if (!saved.length) {
+      listEl.innerHTML = `<div class="inline-empty" style="padding:18px 14px;text-align:center">
+        还没有收录金句，点上方「+ 收录金句」记下打动你的句子，或在每日拾页点「收藏」。
+      </div>`;
+      return;
+    }
+    listEl.innerHTML = saved.map((q, i) => `
+      <article class="quote-card">
+        <p class="quote-text">「${esc(q.text)}」</p>
+        <div class="quote-footer">
+          <span class="quote-source">《${esc(q.book || '随笔摘录')}》${q.author ? ` · ${esc(q.author)}` : ''}${q.page ? ` · ${esc(q.page)}` : ''}${q.tag ? `<span class="my-quote-tag">${esc(q.tag)}</span>` : ''}</span>
+          <div class="quote-actions">
+            <button class="quote-act-btn" type="button" data-myquote-poster="${i}">卡片</button>
+            <button class="quote-act-btn" type="button" data-myquote-del="${i}">删除</button>
+          </div>
+        </div>
+      </article>`).join('');
+  }
+
+  function openQuoteCollector() {
+    const pick = $('#quoteBookPick');
+    if (pick) {
+      pick.innerHTML = `<option value="">不从书架选，直接手填书名与作者</option>` + state.books.map((b) => (
+        `<option value="${esc(b.id)}">《${esc(b.title)}》 · ${esc(b.author)}</option>`
+      )).join('');
+      pick.value = '';
+    }
+    $('#quoteTextInput').value = '';
+    $('#quoteBookInput').value = '';
+    $('#quoteAuthorInput').value = '';
+    $('#quotePageInput').value = '';
+    $('#quoteTagInput').value = '';
+    openSheet('quoteEditorBackdrop');
+    setTimeout(() => $('#quoteTextInput')?.focus(), 220);
+  }
+
+  async function saveCollectedQuote() {
+    const text = ($('#quoteTextInput').value || '').trim();
+    if (!text) { toast('请填写金句正文'); $('#quoteTextInput')?.focus(); return; }
+    const book = ($('#quoteBookInput').value || '').trim() || '随笔摘录';
+    const author = ($('#quoteAuthorInput').value || '').trim();
+    const page = ($('#quotePageInput').value || '').trim();
+    const tag = ($('#quoteTagInput').value || '').trim();
+    const saved = getMeta('savedQuotes', []);
+    saved.unshift({
+      id: uid('qt'),
+      text,
+      book,
+      author,
+      page,
+      tag,
+      manual: true,
+      savedAt: Date.now(),
+    });
+    await setMeta('savedQuotes', saved.slice(0, 300));
+    closeSheet('quoteEditorBackdrop');
+    renderMyQuotes();
+    renderSettings();
+    toast('金句已收录 ✓');
   }
 
   function computeUserTaste() {
@@ -2915,6 +2987,36 @@
       if (posterBtn) {
         const q = state.dailyQuotes[parseInt(posterBtn.dataset.quotePoster, 10)];
         if (q) openPoster(q);
+      }
+    });
+    $('#openQuoteCollectorBtn')?.addEventListener('click', openQuoteCollector);
+    $('#addQuoteInlineBtn')?.addEventListener('click', openQuoteCollector);
+    $('#quoteBookPick')?.addEventListener('change', (e) => {
+      const b = getBook(e.target.value);
+      if (!b) return;
+      $('#quoteBookInput').value = b.title || '';
+      $('#quoteAuthorInput').value = b.author || '';
+    });
+    $('#saveQuoteBtn')?.addEventListener('click', saveCollectedQuote);
+    $('#myQuotesList')?.addEventListener('click', async (e) => {
+      const pBtn = e.target.closest('[data-myquote-poster]');
+      const dBtn = e.target.closest('[data-myquote-del]');
+      const saved = getMeta('savedQuotes', []);
+      if (pBtn) {
+        const q = saved[parseInt(pBtn.dataset.myquotePoster, 10)];
+        if (q) openPoster(q);
+        return;
+      }
+      if (dBtn) {
+        const idx = parseInt(dBtn.dataset.myquoteDel, 10);
+        if (!Number.isNaN(idx)) {
+          saved.splice(idx, 1);
+          await setMeta('savedQuotes', saved);
+          renderMyQuotes();
+          renderDaily();
+          renderSettings();
+          toast('已删除该条金句');
+        }
       }
     });
     $('#recommendedBooksList')?.addEventListener('click', (e) => {
@@ -3153,9 +3255,37 @@
     };
   }
 
+  function getReadingPlan() {
+    const legacyGoal = num(getMeta('goal', 24), 24) || 24;
+    const saved = getMeta('plan', null);
+    const curYear = new Date().getFullYear();
+    return {
+      title: (saved && saved.title) ? String(saved.title) : `${curYear} 年阅读计划`,
+      year: (saved && num(saved.year, 0)) || curYear,
+      booksGoal: (saved && num(saved.booksGoal, 0)) || legacyGoal,
+      dailyMinutesGoal: (saved && num(saved.dailyMinutesGoal, 0)) || 30,
+      weeklyDaysGoal: clamp((saved && num(saved.weeklyDaysGoal, 0)) || 5, 1, 7),
+      wordsWanGoal: saved && saved.wordsWanGoal != null ? Math.max(0, num(saved.wordsWanGoal, 0)) : 300,
+    };
+  }
+
+  function computeWeekReadDays() {
+    const now = new Date();
+    const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dow = (startOfWeek.getDay() + 6) % 7;
+    startOfWeek.setDate(startOfWeek.getDate() - dow);
+    const startTs = startOfWeek.getTime();
+    const days = new Set();
+    (state.sessions || []).forEach((s) => {
+      if (s.startedAt >= startTs) days.add(dateKey(s.startedAt));
+    });
+    return days.size;
+  }
+
   function renderStats() {
     const h = computeHabitData();
-    const goal = num(getMeta('goal', 24), 24) || 24;
+    const plan = getReadingPlan();
+    const goal = plan.booksGoal;
     const finishedCount = h.finished.length;
 
     const percent = clamp(Math.round((finishedCount / goal) * 100), 0, 100);
@@ -3167,9 +3297,34 @@
     }
     const pctEl = $('#goalPercentText'); if (pctEl) pctEl.textContent = `${percent}%`;
     const goalTitle = $('#goalTitleText');
-    if (goalTitle) goalTitle.textContent = `${new Date().getFullYear()} 年已读 ${finishedCount} / ${goal} 本`;
+    if (goalTitle) goalTitle.textContent = `${plan.title} · ${finishedCount} / ${goal} 本`;
     const streakSub = $('#streakSubText');
-    if (streakSub) streakSub.textContent = `连续阅读 ${h.streak} 天 · 今日 ${Math.round(h.todayMinutes)} 分钟`;
+    const weekDays = computeWeekReadDays();
+    if (streakSub) streakSub.textContent = `连续阅读 ${h.streak} 天 · 今日 ${Math.round(h.todayMinutes)} 分钟 · 本周 ${weekDays} 天`;
+
+    const subBars = $('#planSubBars');
+    if (subBars) {
+      const dailyPct = clamp(Math.round((h.todayMinutes / plan.dailyMinutesGoal) * 100), 0, 100);
+      const weekPct = clamp(Math.round((weekDays / plan.weeklyDaysGoal) * 100), 0, 100);
+      const bars = [
+        `<div class="plan-sub-item">
+          <div class="plan-sub-row"><span>今日时长目标</span><strong>${Math.round(h.todayMinutes)} / ${plan.dailyMinutesGoal} 分钟</strong></div>
+          <div class="plan-sub-track"><div class="plan-sub-fill" style="width:${dailyPct}%"></div></div>
+        </div>`,
+        `<div class="plan-sub-item">
+          <div class="plan-sub-row"><span>本周阅读天数</span><strong>${weekDays} / ${plan.weeklyDaysGoal} 天</strong></div>
+          <div class="plan-sub-track"><div class="plan-sub-fill warm" style="width:${weekPct}%"></div></div>
+        </div>`,
+      ];
+      if (plan.wordsWanGoal > 0) {
+        const wPct = clamp(Math.round((h.totalWords / plan.wordsWanGoal) * 100), 0, 100);
+        bars.push(`<div class="plan-sub-item">
+          <div class="plan-sub-row"><span>年度字数目标</span><strong>${h.totalWords.toFixed(1)} / ${plan.wordsWanGoal} 万字</strong></div>
+          <div class="plan-sub-track"><div class="plan-sub-fill" style="width:${wPct}%"></div></div>
+        </div>`);
+      }
+      subBars.innerHTML = bars.join('');
+    }
 
     // 读者画像徽章
     const top = topGenres(2);
@@ -3285,15 +3440,38 @@
     }
   }
 
+  function openPlanSheet() {
+    const plan = getReadingPlan();
+    $('#planTitleInput').value = plan.title;
+    $('#planYearInput').value = String(plan.year);
+    $('#planBooksInput').value = String(plan.booksGoal);
+    $('#planDailyMinsInput').value = String(plan.dailyMinutesGoal);
+    $('#planWeeklyDaysInput').value = String(plan.weeklyDaysGoal);
+    $('#planWordsInput').value = plan.wordsWanGoal ? String(plan.wordsWanGoal) : '';
+    openSheet('planBackdrop');
+  }
+
+  async function savePlanFromForm() {
+    const year = clamp(Math.round(num($('#planYearInput').value, new Date().getFullYear())), 2020, 2035);
+    const title = ($('#planTitleInput').value || '').trim() || `${year} 年阅读计划`;
+    const booksGoal = clamp(Math.round(num($('#planBooksInput').value, 24)), 1, 365);
+    const dailyMinutesGoal = clamp(Math.round(num($('#planDailyMinsInput').value, 30)), 5, 480);
+    const weeklyDaysGoal = clamp(Math.round(num($('#planWeeklyDaysInput').value, 5)), 1, 7);
+    const wordsWanGoal = Math.max(0, Math.round(num($('#planWordsInput').value, 0)));
+    await setMeta('plan', { title, year, booksGoal, dailyMinutesGoal, weeklyDaysGoal, wordsWanGoal });
+    await setMeta('goal', booksGoal);
+    closeSheet('planBackdrop');
+    renderStats();
+    toast('阅读计划已更新 ✓');
+  }
+
   function bindStats() {
-    $('#editGoalBtn')?.addEventListener('click', async () => {
-      const current = num(getMeta('goal', 24), 24);
-      const idx = GOAL_PRESETS.indexOf(current);
-      const next = GOAL_PRESETS[(idx + 1) % GOAL_PRESETS.length];
-      await setMeta('goal', next);
-      renderStats();
-      toast(`年度目标已调整为 ${next} 本`);
+    $('#editGoalBtn')?.addEventListener('click', openPlanSheet);
+    $('#planBookPresets')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-plan-books]');
+      if (btn) $('#planBooksInput').value = btn.dataset.planBooks;
     });
+    $('#savePlanBtn')?.addEventListener('click', savePlanFromForm);
   }
 
   /* =============================== 设置 / 备份 =============================== */
@@ -3351,6 +3529,7 @@
       sessions: state.sessions,
       meta: {
         goal: getMeta('goal', 24),
+        plan: getMeta('plan', null),
         theme: getMeta('theme', 'auto'),
         savedQuotes: getMeta('savedQuotes', []),
       },
@@ -3411,7 +3590,7 @@
       sAdded++;
     }
     if (data.meta) {
-      for (const key of ['goal', 'savedQuotes', 'theme']) {
+      for (const key of ['goal', 'plan', 'savedQuotes', 'theme']) {
         if (key in data.meta) await setMeta(key, data.meta[key]);
       }
       if (data.meta.theme) applyTheme();
@@ -3468,7 +3647,6 @@
       toast('已清除豆包配置');
     });
 
-    $('#loadDemoBooksBtn')?.addEventListener('click', loadDemoBooks);
     $('#clearAllBtn')?.addEventListener('click', async () => {
       if (!window.confirm('确定要清空所有书籍、读书笔记和阅读记录吗？此操作无法撤销（建议先导出 JSON 备份）。')) {
         return;
@@ -3629,181 +3807,31 @@ ${libraryDigest() || '（暂无）'}
     }
   }
 
-  /* =============================== 示例数据 =============================== */
-  const DEMO_BOOKS = [
-    {
-      key: '三体',
-      status: 'reading',
-      rating: 4.5,
-      progress: 62,
-      sessions: [
-        { daysAgo: 6, hour: 22, minutes: 45 },
-        { daysAgo: 4, hour: 21, minutes: 38 },
-        { daysAgo: 2, hour: 23, minutes: 52 },
-        { daysAgo: 1, hour: 22, minutes: 41 },
-      ],
-      notes: [
-        { type: 'quote', content: '我们都是阴沟里的虫子，但总还是得有人仰望星空。', page: 'P.213', image: '', daysAgo: 3, hour: 22 },
-        { type: 'reflection', content: '第一次真正理解"宏大"两个字。叶文洁按下发射键的那一刻，个人的绝望变成了整个文明的转折点，这种因果的重量让人喘不过气。', page: '第 12 章', image: '', daysAgo: 1, hour: 23 },
-      ],
-      characters: [
-        { name: '叶文洁', role: '天体物理学家', color: '#3D5A73', tags: ['绝望', '理性', '关键抉择'], bio: '亲历时代创伤后对人类文明彻底失望，在红岸基地向宇宙发出第一声呼唤，成为两个文明命运的转折点。', quote: '到这里来吧，我将帮助你们获得这个世界。' },
-        { name: '汪淼', role: '纳米材料学家', color: '#2F6354', tags: ['好奇', '坚韧'], bio: '被卷入科学家自杀谜局的纳米学者，通过三体游戏逐步逼近真相，也是读者进入这个世界的眼睛。', quote: '整个宇宙将为你闪烁。' },
-        { name: '史强', role: '刑警 / 反恐', color: '#8A5A44', tags: ['粗粝', '可靠'], bio: '不修边幅却极其可靠的老刑警，用最朴素的生存智慧对抗最宏大的未知威胁。', quote: '邪乎到家必有鬼。' },
-        { name: '罗辑', role: '社会学者', color: '#6E4B6A', tags: ['玩世不恭', '洞察'], bio: '被推上历史舞台的普通人，在孤独中推演出黑暗森林法则，成为悬在两个文明头顶的执剑人。', quote: '我对三体世界说话。' },
-      ],
-      relations: [
-        { from: 0, to: 1, label: '引导', tone: 'neutral' },
-        { from: 1, to: 2, label: '并肩', tone: 'bond' },
-        { from: 1, to: 3, label: '同路', tone: 'neutral' },
-        { from: 2, to: 3, label: '护佑', tone: 'mentor' },
-        { from: 0, to: 3, label: '命运交错', tone: 'rival' },
-      ],
-    },
-    {
-      key: '活着',
-      status: 'finished',
-      rating: 5,
-      progress: 100,
-      sessions: [
-        { daysAgo: 9, hour: 8, minutes: 62 },
-        { daysAgo: 7, hour: 7, minutes: 55 },
-        { daysAgo: 5, hour: 9, minutes: 48 },
-        { daysAgo: 3, hour: 8, minutes: 39 },
-      ],
-      notes: [
-        { type: 'reflection', content: '读到最后福贵牵着老牛走过田埂，突然明白"活着"本身就是答案。余华把苦难写得极轻，反而更重。', page: '结尾', image: '', daysAgo: 3, hour: 9 },
-      ],
-      characters: [
-        { name: '福贵', role: '主人公', color: '#9A7234', tags: ['坚韧', '认命', '温厚'], bio: '从败家少爷到一无所有的老人，一生送走所有至亲，最后与一头老牛平静度日。', quote: '人是为了活着本身而活着的。' },
-        { name: '家珍', role: '妻子', color: '#7B3E4B', tags: ['隐忍', '深情'], bio: '出身米行千金，却用一生包容福贵的荒唐，在贫病中始终不曾离开。', quote: '我不图什么，就想跟你过日子。' },
-        { name: '有庆', role: '儿子', color: '#4A6B52', tags: ['纯真', '赤脚奔跑'], bio: '每天赤脚跑十几里路上学的少年，为了给校长献血意外离世，是全书最锋利的一刀。', quote: '' },
-      ],
-      relations: [
-        { from: 0, to: 1, label: '夫妻', tone: 'love' },
-        { from: 0, to: 2, label: '父子', tone: 'bond' },
-        { from: 1, to: 2, label: '母子', tone: 'bond' },
-      ],
-    },
-    {
-      key: '人类简史',
-      status: 'reading',
-      rating: 4,
-      progress: 28,
-      sessions: [
-        { daysAgo: 8, hour: 20, minutes: 34 },
-        { daysAgo: 2, hour: 21, minutes: 46 },
-      ],
-      notes: [],
-      characters: [],
-      relations: [],
-    },
-    {
-      key: '白夜行',
-      status: 'want',
-      rating: 0,
-      progress: 0,
-      sessions: [],
-      notes: [],
-      characters: [
-        { name: '桐原亮司', role: '黑暗中的守护者', color: '#3E5266', tags: ['沉默', '赎罪'], bio: '在父亲命案后隐入黑暗，用一生为雪穗清除障碍，自己却始终不被阳光照到。', quote: '我的人生就像在白夜里走路。' },
-        { name: '唐泽雪穗', role: '完美女性', color: '#7B3E4B', tags: ['优雅', '深渊'], bio: '外表无懈可击的女性，内心背负童年创伤，与亮司在暗处共生。', quote: '' },
-      ],
-      relations: [{ from: 0, to: 1, label: '共生', tone: 'love' }],
-    },
-  ];
-
-  function dayAt(daysAgo, hour, baseTs = Date.now()) {
-    const d = new Date(baseTs);
-    d.setDate(d.getDate() - (daysAgo || 0));
-    d.setHours(hour == null ? 20 : hour, Math.floor(Math.random() * 50), 0, 0);
-    return d.getTime();
-  }
-
-  async function loadDemoBooks() {    if (state.books.length) {
-      toast('书架里已有书，示例将追加导入');
-    }
-    let added = 0;
-    for (const demo of DEMO_BOOKS) {
-      const meta = (window.CURATED_BOOKS || []).find((b) => b.title === demo.key);
-      if (!meta) continue;
-      if (state.books.some((b) => b.title === meta.title)) continue;
-      const now = Date.now();
-      const chars = demo.characters.map((c) => ({ id: uid('ch'), ...c }));
-      const relations = demo.relations.map((r) => ({
-        id: uid('rl'),
-        from: chars[r.from] ? chars[r.from].id : (chars[0] && chars[0].id),
-        to: chars[r.to] ? chars[r.to].id : (chars[1] && chars[1].id),
-        label: r.label,
-        tone: r.tone,
-      })).filter((r) => r.from && r.to);
-      const notes = demo.notes.map((n) => ({
-        id: uid('nt'),
-        type: n.type,
-        content: n.content,
-        page: n.page,
-        image: n.image || '',
-        createdAt: dayAt(n.daysAgo, n.hour, now),
-      }));
-      const book = normalizeBook({
-        id: uid('bk'),
-        title: meta.title,
-        author: meta.author,
-        genre: meta.genre,
-        pages: meta.pages,
-        wordsWan: meta.wordsWan,
-        spineColor: meta.spineColor,
-        summary: meta.summary,
-        coverUrl: '',
-        status: demo.status,
-        rating: demo.rating,
-        progress: demo.progress,
-        notes,
-        characters: chars,
-        relations,
-        createdAt: now - 86400000 * 12,
-        updatedAt: now,
-        lastReadAt: demo.sessions.length ? dayAt(demo.sessions[demo.sessions.length - 1].daysAgo, demo.sessions[demo.sessions.length - 1].hour, now) : 0,
-      });
-      await saveBook(book, true);
-      added++;
-
-      for (const s of demo.sessions) {
-        await addSession({
-          id: uid('ss'),
-          bookId: book.id,
-          startedAt: dayAt(s.daysAgo, s.hour, now),
-          minutes: s.minutes,
-          source: 'timer',
-        });
-      }
-    }
-    renderShelf(); renderDaily(); renderStats(); renderSettings();
-    if (added) {
-      state.selectedBookId = state.books[state.books.length - 1].id;
-      renderShelf();
-      toast(`已导入 ${added} 本示例书，含人物图谱与阅读记录`);
-    } else {
-      toast('示例书籍已在书架中');
-    }
-  }
-
-  /* =============================== 启动 =============================== */
-  function maybeShowInstallBanner() {
-    const banner = $('#installBanner');
-    if (!banner) return;
-    const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-    const dismissed = getMeta('installDismissed', false);
-    if (standalone || dismissed || bridge.available) { banner.classList.add('hidden'); return; }
-    banner.classList.remove('hidden');
-    $('#closeInstallBanner')?.addEventListener('click', async () => {
-      banner.classList.add('hidden');
-      await setMeta('installDismissed', true);
+  /* =============================== 清理历史测试书 =============================== */
+  async function purgeLegacyDemoBooks() {
+    if (getMeta('demoPurgedV1', false)) return;
+    const demoTitles = new Set(['三体', '人类简史', '活着', '百年孤独']);
+    const demoSnippets = ['给岁月以文明', '黑暗森林法则', '认知革命', '福贵', '布恩迪亚', '马孔多'];
+    const toRemove = state.books.filter((b) => {
+      if (!demoTitles.has(b.title) || b.coverUrl) return false;
+      const noteText = (b.notes || []).map((n) => n.content || '').join(' ');
+      const charText = (b.characters || []).map((c) => c.name || '').join(' ');
+      return demoSnippets.some((kw) => noteText.includes(kw) || charText.includes(kw));
     });
-  }
-
-  function hideSafariGuideIfNative() {
-    if (bridge.available) $('#safariInstallGuideCard')?.classList.add('hidden');
+    if (toRemove.length) {
+      const rmIds = new Set(toRemove.map((b) => b.id));
+      for (const b of toRemove) {
+        await dbDelete('books', b.id);
+      }
+      const rmSessions = state.sessions.filter((s) => rmIds.has(s.bookId));
+      for (const s of rmSessions) {
+        await dbDelete('sessions', s.id);
+      }
+      state.books = state.books.filter((b) => !rmIds.has(b.id));
+      state.sessions = state.sessions.filter((s) => !rmIds.has(s.bookId));
+      if (rmIds.has(state.selectedBookId)) state.selectedBookId = null;
+    }
+    await setMeta('demoPurgedV1', true);
   }
 
   function registerSW() {
@@ -3867,6 +3895,7 @@ ${libraryDigest() || '（暂无）'}
     }
 
     applyTheme();
+    await purgeLegacyDemoBooks();
     bindStatic();
 
     const theme = getMeta('theme', 'auto');
