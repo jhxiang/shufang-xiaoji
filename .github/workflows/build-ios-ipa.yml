@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build ShufangXiaoji.ipa
+    name: Build 小象阅痕 (XiaoxiangYuehen.ipa)
     runs-on: macos-14
     timeout-minutes: 40
 
@@ -77,7 +77,7 @@ jobs:
             exit 1
           fi
 
-          rm -rf build/Payload ShufangXiaoji.ipa
+          rm -rf build/Payload XiaoxiangYuehen.ipa
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           # 未签名包需移除可能残留的签名文件
@@ -85,21 +85,21 @@ jobs:
           rm -f "build/Payload/ShufangXiaoji.app/embedded.mobileprovision"
 
           cd build
-          zip -qry ../ShufangXiaoji.ipa Payload
+          zip -qry ../XiaoxiangYuehen.ipa Payload
           cd ..
-          ls -lh ShufangXiaoji.ipa
-          shasum -a 256 ShufangXiaoji.ipa | tee ShufangXiaoji.ipa.sha256
+          ls -lh XiaoxiangYuehen.ipa
+          shasum -a 256 XiaoxiangYuehen.ipa | tee XiaoxiangYuehen.ipa.sha256
 
       - name: Verify IPA structure
         working-directory: ios
         run: |
-          unzip -l ShufangXiaoji.ipa | head -30
-          unzip -l ShufangXiaoji.ipa | grep -q "Payload/ShufangXiaoji.app/WebApp/index.html" \
+          unzip -l XiaoxiangYuehen.ipa | head -30
+          unzip -l XiaoxiangYuehen.ipa | grep -q "Payload/ShufangXiaoji.app/WebApp/index.html" \
             && echo "内置 Web 资源校验通过" \
             || { echo "IPA 内缺少 WebApp 资源" >&2; exit 1; }
-          unzip -l ShufangXiaoji.ipa | grep -q "Payload/ShufangXiaoji.app/AppIcon" \
+          unzip -l XiaoxiangYuehen.ipa | grep -q "Payload/ShufangXiaoji.app/AppIcon" \
             && echo "AppIcon 校验通过" || true
-          if unzip -l ShufangXiaoji.ipa | grep -iE "(\.DS_Store|__MACOSX|test_|\.spec\.|demo_books)"; then
+          if unzip -l XiaoxiangYuehen.ipa | grep -iE "(\.DS_Store|__MACOSX|test_|\.spec\.|demo_books)"; then
             echo "IPA 内发现残留测试或临时文件" >&2
             exit 1
           fi
@@ -108,10 +108,10 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ShufangXiaoji-ipa
+          name: XiaoxiangYuehen-ipa
           path: |
-            ios/ShufangXiaoji.ipa
-            ios/ShufangXiaoji.ipa.sha256
+            ios/XiaoxiangYuehen.ipa
+            ios/XiaoxiangYuehen.ipa.sha256
           if-no-files-found: error
           retention-days: 90
 
