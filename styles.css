@@ -534,24 +534,37 @@ input, textarea, select {
   background: rgba(255, 255, 255, 0.25);
 }
 
-/* Unselected Book Spine */
+/* Unselected Book Spine — 实体书紧挨站立质感（参考实体书架） */
+.shelf-books-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  overflow-x: auto;
+  padding: 14px 6px 0;
+  scrollbar-width: none;
+}
+
+.shelf-books-row::-webkit-scrollbar {
+  display: none;
+}
+
 .book-spine {
   position: relative;
   flex: 0 0 auto;
-  width: var(--spine-w, 40px);
-  height: var(--spine-h, 162px);
-  border-radius: 5px 5px 2px 2px;
+  width: var(--spine-w, 34px);
+  height: var(--spine-h, 152px);
+  border-radius: 2.5px 2.5px 1px 1px;
   background: var(--spine-bg, #3A6B5C);
   color: var(--spine-fg, #FDFBF7);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 3px 9px;
+  padding: 10px 2px 8px;
   box-shadow:
-    inset 3px 0 5px rgba(255, 255, 255, 0.16),
-    inset -3px 0 6px rgba(0, 0, 0, 0.22),
-    2px 0 6px rgba(24, 18, 12, 0.14);
+    inset 3px 0 5px rgba(255, 255, 255, 0.22),
+    inset -3px 0 6px rgba(0, 0, 0, 0.26),
+    1px 0 3px rgba(20, 16, 12, 0.16);
   transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.22s ease;
   overflow: hidden;
   user-select: none;
@@ -564,14 +577,65 @@ input, textarea, select {
   left: 0;
   right: 0;
   height: 1px;
-  background: rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.24);
+  z-index: 2;
 }
 
-.book-spine::before { top: 14px; }
-.book-spine::after { bottom: 18px; }
+.book-spine::before { top: 12px; }
+.book-spine::after { bottom: 14px; }
+
+/* 有真实封面时：清晰呈现真实书封艺术，叠加实体书脊圆柱立体光影 */
+.book-spine.has-cover {
+  padding: 0;
+}
+
+.book-spine.has-cover::before,
+.book-spine.has-cover::after {
+  display: none;
+}
+
+.spine-cover-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  z-index: 1;
+}
+
+.spine-cylinder-light {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.28) 0%,
+    rgba(255, 255, 255, 0.24) 14%,
+    rgba(255, 255, 255, 0.05) 34%,
+    rgba(0, 0, 0, 0.02) 74%,
+    rgba(0, 0, 0, 0.28) 100%
+  );
+  box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.32), inset 0 -2px 4px rgba(0, 0, 0, 0.22);
+}
+
+.book-spine.has-cover .spine-title,
+.book-spine.has-cover .spine-author,
+.book-spine.has-cover .spine-status-dot {
+  display: none;
+}
+
+.book-spine.has-cover .spine-progress-bar {
+  z-index: 3;
+  height: 2.5px;
+  background: rgba(0, 0, 0, 0.22);
+}
 
 .book-spine:hover {
-  transform: translateY(-5px);
+  transform: translateY(-6px);
+  z-index: 3;
 }
 
 .book-spine:active {
@@ -2783,39 +2847,12 @@ html.native-shell .sheet-body {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
-/* 书脊根据真实封面自适应：叠加封面主色底纹与柔光保护层 */
-.book-spine.has-cover .spine-cover-tint {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  background-position: center;
-  filter: blur(2px) saturate(1.15);
-  transform: scale(1.12);
-  opacity: 0.42;
-  pointer-events: none;
-}
-
-.book-spine.has-cover::before,
-.book-spine.has-cover::after {
-  z-index: 2;
-}
-
-.book-spine.has-cover .spine-scrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    rgba(0, 0, 0, 0.34) 0%,
-    rgba(0, 0, 0, 0.22) 22%,
-    rgba(0, 0, 0, 0.18) 78%,
-    rgba(0, 0, 0, 0.4) 100%
-  );
-  pointer-events: none;
-}
-
-.book-spine.has-cover .spine-title,
-.book-spine.has-cover .spine-author {
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
 }
 
 /* 实体书质感通用底座（平装/精装 10:14.5 版图 + 左侧书脊折痕 + 右侧书页厚度） */

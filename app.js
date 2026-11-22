@@ -1,5 +1,5 @@
 /* =========================================================================
- * eleread · app.js
+ * 小象阅痕 · app.js
  * 阅读计时 / 书架书脊 / 双维度分类 / 读后感（语音·拍照 OCR）/ 人物关系图谱
  * 每日拾页 / 荐书 / 阅读习惯与时段分析 / 备份恢复 / 豆包 AI
  * ========================================================================= */
@@ -348,9 +348,9 @@
   window.__shufangPermissionDenied = (kind) => {
     stopDictationUI();
     if (kind === 'microphone') {
-      toast('麦克风权限被拒绝：请在 设置 › eleread 中开启麦克风', { duration: 3600 });
+      toast('麦克风权限被拒绝：请在 设置 › 小象阅痕 中开启麦克风', { duration: 3600 });
     } else if (kind === 'speech') {
-      toast('语音识别权限被拒绝：请在 设置 › eleread 中开启语音识别', { duration: 3600 });
+      toast('语音识别权限被拒绝：请在 设置 › 小象阅痕 中开启语音识别', { duration: 3600 });
     } else {
       toast('缺少系统权限，请在「设置」中开启');
     }
@@ -563,11 +563,19 @@
   }
 
   /* =============================== 书架 =============================== */
-  const SIZE = { wMin: 34, wMax: 52, hMin: 130, hMax: 178 };
+  const SIZE = { wMin: 26, wMax: 44, hMin: 126, hMax: 174 };
 
   function spineSize(book) {
-    const w = clamp(SIZE.wMin + Math.log10(Math.max(1, book.wordsWan || 1)) * 9.5, SIZE.wMin, SIZE.wMax);
-    const h = clamp(SIZE.hMin + Math.sqrt(Math.max(1, book.pages || 60)) * 2.4, SIZE.hMin, SIZE.hMax);
+    const jitterW = (hashStr(`w|${book.title}`) - 0.5) * 6;
+    const jitterH = (hashStr(`h|${book.title}`) - 0.5) * 26;
+    const baseW = book.wordsWan
+      ? SIZE.wMin + Math.log10(Math.max(1, book.wordsWan)) * 8.2
+      : SIZE.wMin + 6 + jitterW;
+    const baseH = book.pages
+      ? SIZE.hMin + Math.sqrt(Math.max(40, book.pages)) * 1.9 + jitterH * 0.45
+      : 146 + jitterH;
+    const w = clamp(baseW, SIZE.wMin, SIZE.wMax);
+    const h = clamp(baseH, SIZE.hMin, SIZE.hMax);
     return { w: Math.round(w), h: Math.round(h) };
   }
 
@@ -827,13 +835,13 @@
       const sel = state.selectedBookId === b.id ? ' selected' : '';
       const dot = b.status === 'finished' ? 'finished' : (b.status === 'reading' ? 'reading' : '');
       const hasCover = b.coverUrl ? ' has-cover' : '';
-      const tint = b.coverUrl
-        ? `<span class="spine-cover-tint" style="background-image:url('${esc(b.coverUrl)}')"></span><span class="spine-scrim"></span>`
+      const coverLayer = b.coverUrl
+        ? `<img class="spine-cover-img" src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.parentElement.classList.remove('has-cover');this.remove()"><span class="spine-cylinder-light"></span>`
         : '';
       return `<button type="button" class="book-spine${sel}${hasCover}" data-book-id="${esc(b.id)}"
-        title="${esc(b.title)} · ${STATUS_LABELS[b.status]}"
+        title="${esc(b.title)} · ${esc(b.author)} · ${STATUS_LABELS[b.status]}"
         style="--spine-w:${w}px;--spine-h:${h}px;--spine-bg:${esc(b.spineColor)}">
-        ${tint}
+        ${coverLayer}
         <span class="spine-status-dot ${dot}"></span>
         <span class="spine-title">${esc(b.title)}</span>
         <span class="spine-author">${esc(b.author)}</span>
@@ -1446,7 +1454,7 @@
 
     const applyMerged = (done) => {
       if (state.searchSeq !== searchToken) return;
-      const merged = mergeResults(localHits, onlineList);
+      const merged = mergeResults(localHits, onlineList, q);
       state.searchResults = merged;
       if (merged.length) {
         const srcText = [...sources].join(' + ');
@@ -1495,19 +1503,96 @@
     applyMerged(true);
   }
 
-  function mergeResults(local, online) {
-    const out = [];
-    const seen = new Set();
-    const push = (item) => {
-      if (!item || !item.title) return;
-      const key = `${item.title}|${item.author}`.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(item);
+  function hasCJK(str) {
+    return /[\u4e00-\u9fff]/.test(String(str || ''));
+  }
+
+  function normalizeTitleKey(title) {
+    return String(title || '')
+      .toLowerCase()
+      .replace(/[《》<>「」『』【】\[\]()（）]/g, '')
+      .replace(/[:：\-—·,，.。!！?？\s]+/g, '')
+      .replace(/(精装版|平装版|典藏版|珍藏版|完整版|全集|修订版|增订版|插图版|无删减版)$/g, '');
+  }
+
+  function scoreSearchItem(item, query) {
+    const q = String(query || '').trim().toLowerCase();
+    const qNorm = normalizeTitleKey(q);
+    const title = String(item.title || '').toLowerCase();
+    const tNorm = normalizeTitleKey(title);
+    const author = String(item.author || '').toLowerCase();
+    const summary = String(item.summary || '').toLowerCase();
+    const queryIsCJK = hasCJK(q);
+
+    let score = 0;
+    if (tNorm === qNorm && qNorm) score += 120;
+    else if (qNorm && tNorm.startsWith(qNorm)) score += 72;
+    else if (qNorm && tNorm.includes(qNorm)) score += 42;
+    else if (q && title.includes(q)) score += 34;
+
+    if (q && author.includes(q)) score += 32;
+    if (q && summary.includes(q)) score += 10;
+
+    if (queryIsCJK) {
+      if (hasCJK(item.title)) score += 24;
+      else score -= 24;
+      if (hasCJK(item.summary)) score += 8;
+      if (hasCJK(item.author)) score += 6;
+    }
+
+    // 导读/解读/习题等衍生读物降权，让原著排前面
+    if (/(导读|解读|精读|拆书|伴读|书评|习题|测试|试卷|考点|合集|名师)/.test(item.title || '')) {
+      score -= 22;
+    }
+
+    if (item.local) score += 16;
+    if (item.coverUrl) score += 14;
+    if (item.pages) score += 6;
+    if ((item.summary || '').length > 24) score += 8;
+    return score;
+  }
+
+  function mergeResults(local, online, query = '') {
+    const byKey = new Map();
+    const queryIsCJK = hasCJK(query);
+
+    const ingest = (raw) => {
+      if (!raw || !raw.title) return;
+      const key = normalizeTitleKey(raw.title) || `${raw.title}|${raw.author}`.toLowerCase();
+      const prev = byKey.get(key);
+      if (!prev) {
+        byKey.set(key, { ...raw });
+        return;
+      }
+      // 跨书源字段智能融合：保留最优封面、最完整简介、真实页数/字数与匹配语言的作者名
+      if (!prev.coverUrl && raw.coverUrl) prev.coverUrl = raw.coverUrl;
+      else if (prev.coverUrl && raw.coverUrl && raw.coverUrl.includes('mzstatic.com') && !prev.coverUrl.includes('mzstatic.com')) {
+        prev.coverUrl = raw.coverUrl;
+      }
+      if (!prev.pages && raw.pages) prev.pages = raw.pages;
+      if (!prev.wordsWan && raw.wordsWan) prev.wordsWan = raw.wordsWan;
+      if (raw.summary) {
+        const prevBetterLang = queryIsCJK && hasCJK(prev.summary) && !hasCJK(raw.summary);
+        const rawBetterLang = queryIsCJK && hasCJK(raw.summary) && !hasCJK(prev.summary);
+        if (rawBetterLang || (!prevBetterLang && raw.summary.length > (prev.summary || '').length)) {
+          prev.summary = raw.summary;
+        }
+      }
+      if (raw.author && raw.author !== '佚名') {
+        if (!prev.author || prev.author === '佚名' || (queryIsCJK && hasCJK(raw.author) && !hasCJK(prev.author))) {
+          prev.author = raw.author;
+        }
+      }
+      if (raw.local) prev.local = true;
     };
-    local.forEach(push);
-    online.forEach(push);
-    return out.slice(0, 14).map((r) => ({ ...r, spineColor: r.spineColor || pickColorFor(r.title) }));
+
+    local.forEach(ingest);
+    online.forEach(ingest);
+
+    return [...byKey.values()]
+      .sort((a, b) => scoreSearchItem(b, query) - scoreSearchItem(a, query))
+      .slice(0, 14)
+      .map((r) => ({ ...r, spineColor: r.spineColor || pickColorFor(r.title) }));
   }
 
   function renderOnlineResults(results) {
@@ -2928,7 +3013,7 @@
     ctx.fillStyle = accent;
     ctx.font = 'bold 24px -apple-system, "PingFang SC", sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText('eleread · 每日拾页', W - 96, footerY + 42);
+    ctx.fillText('小象阅痕 · 每日拾页', W - 96, footerY + 42);
     ctx.textAlign = 'left';
   }
 
@@ -2968,7 +3053,7 @@
       const canvas = $('#posterCanvas');
       if (!canvas) return;
       const dataUrl = canvas.toDataURL('image/png');
-      shareDataUrl(dataUrl, 'eleread-摘录卡片.png');
+      shareDataUrl(dataUrl, '小象阅痕-摘录卡片.png');
     });
     $('#copyPosterQuoteBtn')?.addEventListener('click', async () => {
       const q = state.posterQuote;
@@ -3271,7 +3356,7 @@
       },
     };
     const json = JSON.stringify(data);
-    const filename = `eleread备份-${dateKey()}.json`;
+    const filename = `小象阅痕备份-${dateKey()}.json`;
     if (bridge.available) {
       const base64 = btoa(unescape(encodeURIComponent(json)));
       bridge.post({ type: 'shareFile', filename, mime: 'application/json', base64 });

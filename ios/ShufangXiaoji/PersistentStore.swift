@@ -38,7 +38,7 @@ final class PersistentStore {
             do {
                 try data.write(to: fileURL, options: .atomic)
             } catch {
-                NSLog("[eleread] 快照写入失败: %@", error.localizedDescription)
+                NSLog("[小象阅痕] 快照写入失败: %@", error.localizedDescription)
             }
         }
     }

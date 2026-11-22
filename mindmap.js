@@ -324,7 +324,7 @@
         ctx.fillText(`《${bookTitle}》人物关系思维导图`, 40, 54);
         ctx.fillStyle = isDark ? '#8B9790' : '#7A827D';
         ctx.font = '16px -apple-system, "PingFang SC", sans-serif';
-        ctx.fillText('eleread · 人物图谱', 40, 82);
+        ctx.fillText('小象阅痕 · 人物图谱', 40, 82);
 
         const ox = 0;
         const oy = 60;

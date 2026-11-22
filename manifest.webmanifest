@@ -1,6 +1,6 @@
 {
-  "name": "eleread",
-  "short_name": "eleread",
+  "name": "小象阅痕",
+  "short_name": "小象阅痕",
   "description": "极简书架阅读记录：书脊书架、专注计时、语音与拍照扫描笔记、人物关系导图与阅读时段分析",
   "start_url": "./index.html",
   "scope": "./",
