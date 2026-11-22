@@ -1070,7 +1070,7 @@
     const b = getBook(id);
     if (!b) return;
     if (!window.confirm(`确定要从书架删除《${b.title}》吗？该书的笔记与阅读记录也会一并移除。`)) return;
-    await deleteBook(id);
+    await removeBook(id);
     if (state.detailBookId === id) closeSheet('bookDetailBackdrop');
     renderShelf();
     renderDaily();
@@ -3834,14 +3834,9 @@ ${libraryDigest() || '（暂无）'}
 
   /* =============================== 清理历史测试书 =============================== */
   async function purgeLegacyDemoBooks() {
-    if (getMeta('demoPurgedV2', false)) return;
+    if (getMeta('demoPurgedV3', false)) return;
     const demoTitles = new Set(['三体', '人类简史', '活着', '百年孤独']);
-    const fiveDaysAgo = Date.now() - 86400000 * 5;
-    const toRemove = state.books.filter((b) => (
-      demoTitles.has(b.title)
-      && !b.coverUrl
-      && (!b.createdAt || b.createdAt < fiveDaysAgo)
-    ));
+    const toRemove = state.books.filter((b) => demoTitles.has(b.title) && !b.coverUrl);
     if (toRemove.length) {
       const rmIds = new Set(toRemove.map((b) => b.id));
       for (const b of toRemove) {
@@ -3855,7 +3850,7 @@ ${libraryDigest() || '（暂无）'}
       state.sessions = state.sessions.filter((s) => !rmIds.has(s.bookId));
       if (rmIds.has(state.selectedBookId)) state.selectedBookId = null;
     }
-    await setMeta('demoPurgedV2', true);
+    await setMeta('demoPurgedV3', true);
   }
 
   function registerSW() {
