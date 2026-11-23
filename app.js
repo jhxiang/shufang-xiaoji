@@ -420,27 +420,40 @@
         $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'scan'));
       }
 
-      // 单页：默认用 Apple CIDocumentEnhancer 彩色增亮（身份证/彩图绝不糊脸），同时显示 4 档滤镜条供一键切黑白文档/原图
+      // 单页：有精确版面框时默认渲染「📝 白底重排」（纯白底 + 按原图 x,y,w,h 坐标精准放字），
+      // 同时显示 5 档切换条，可一键切「📄 黑白文档 / ✨ 增亮 / 🌫 灰度 / 🖼 原图」
       if (Array.isArray(pages) && pages.length === 1) {
         const p = pages[0];
         const pageImg = p.imageBase64
           ? (String(p.imageBase64).startsWith('data:') ? String(p.imageBase64) : `data:image/jpeg;base64,${p.imageBase64}`)
           : primaryDataUrl;
         state.noteRawScanB64 = p.rawBase64 || '';
-        state.noteScanFilter = p.filterMode || 'magic';
+        const blocks = Array.isArray(p.blocks) ? p.blocks : [];
+        state.noteLayout = {
+          width: p.width || 0,
+          height: p.height || 0,
+          aspectRatio: p.aspectRatio || 0.72,
+          blocks,
+        };
+        if (blocks.length) {
+          const rendered = renderCleanLayoutCanvas([state.noteLayout]);
+          if (rendered && rendered.dataUrl) {
+            state.noteScanFilter = 'retypeset';
+            state.noteLayout = rendered.layout;
+            setNoteImage(rendered.dataUrl);
+            $('#noteScanFilterBar')?.classList.remove('hidden');
+            $$('#noteScanFilterBar [data-scan-filter]').forEach((b) => b.classList.toggle('active', b.dataset.scanFilter === 'retypeset'));
+            setOcrStatus(`白底原位重排（${blocks.length} 处版面框 · 点击放大 · 可切黑白/增亮/原图）`);
+            toast('已按原图位置生成白底文字版，可随时切换滤镜');
+            return;
+          }
+        }
         if (pageImg) {
-          const blocks = Array.isArray(p.blocks) ? p.blocks : [];
-          state.noteLayout = {
-            width: p.width || 0,
-            height: p.height || 0,
-            aspectRatio: p.aspectRatio || 0.72,
-            blocks,
-          };
+          state.noteScanFilter = p.filterMode || 'magic';
           setNoteImage(pageImg);
           $('#noteScanFilterBar')?.classList.toggle('hidden', !state.noteRawScanB64);
           $$('#noteScanFilterBar [data-scan-filter]').forEach((b) => b.classList.toggle('active', b.dataset.scanFilter === state.noteScanFilter));
-          setOcrStatus(`智能增亮（保留原色）· ${blocks.length} 处可点选文字 · 点击放大`);
-          toast('扫描完成，可一键切换「增亮 / 黑白文档 / 灰度 / 原图」');
+          setOcrStatus(`智能增亮（点击放大）`);
           return;
         }
       }
@@ -3066,8 +3079,8 @@
     canvas.height = Math.round(rawTotalH * scaleAll);
     const ctx = canvas.getContext('2d');
 
-    // 纯净纸底，彻底去除原照片阴影、手指、折痕与杂色噪声
-    ctx.fillStyle = '#F2ECE0';
+    // 纯白底，彻底去除原照片阴影、手指、折痕与杂色噪声
+    ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const combinedBlocks = [];
@@ -3078,11 +3091,11 @@
       const py = offsetY * scaleAll;
       const pw = canvas.width;
 
-      // 单页温润纸白画布，与原图 1:1 严格重合（0 边距偏移）
-      ctx.fillStyle = '#FAF7F0';
+      // 单页纯白画布，与原图 1:1 严格重合（0 边距偏移）
+      ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, py, pw, ph);
 
-      ctx.fillStyle = '#23201C';
+      ctx.fillStyle = '#111111';
       ctx.textBaseline = 'alphabetic';
 
       page.blocks.forEach((b) => {
@@ -3256,13 +3269,31 @@
       }
       if (engine === 'ocrspace') {
         try {
-          setOcrStatus('正在用 OCR.space 定位原图文字框…');
+          setOcrStatus('正在用 OCR.space 定位原图文字框并生成白底原位版…');
           const res = await ocrWithOcrSpace(dataUrl);
-          if (res && (res.blocks.length || res.text)) {
-            // 100% 保留原图版面，将 OCR.space 返回的真实像素坐标转为 0..1 版面框直接叠在原图对应位置
-            state.noteLayout = { blocks: res.blocks, plainText: res.text };
-            setOcrStatus(`已定位原图版面（OCR.space · ${res.blocks.length} 处可点选文字 · 点击放大）`);
-            toast('原图版面定位完成，点击图片可放大并点选复制');
+          if (res && res.blocks.length) {
+            state.noteRawScanB64 = dataUrl.split(',')[1] || '';
+            const pageObj = {
+              width: res.width,
+              height: res.height,
+              aspectRatio: res.width / res.height,
+              blocks: res.blocks,
+            };
+            const rendered = renderCleanLayoutCanvas([pageObj]);
+            if (rendered && rendered.dataUrl) {
+              state.noteScanFilter = 'retypeset';
+              state.noteLayout = rendered.layout;
+              setNoteImage(rendered.dataUrl);
+              $('#noteScanFilterBar')?.classList.remove('hidden');
+              $$('#noteScanFilterBar [data-scan-filter]').forEach((b) => b.classList.toggle('active', b.dataset.scanFilter === 'retypeset'));
+              setOcrStatus(`白底原位重排（OCR.space · ${res.blocks.length} 处版面框 · 点击放大）`);
+              toast('已按原图精确位置生成白底文字版');
+              return;
+            }
+          }
+          if (res && res.text) {
+            state.noteLayout = { blocks: [], plainText: res.text };
+            setOcrStatus(`已识别（OCR.space · ${res.text.length} 字 · 点击放大可复制）`);
             return;
           }
         } catch { /* fallback to next engine */ }
@@ -3331,7 +3362,7 @@
               });
             });
           });
-          if (text || blocks.length) return { text, blocks };
+          if (text || blocks.length) return { text, blocks, width: dims.width, height: dims.height };
         }
         lastErr = new Error((data && data.ErrorMessage && data.ErrorMessage[0]) || 'OCR.space 未返回文字');
       } catch (err) {
@@ -3391,9 +3422,23 @@
     });
     $('#noteScanFilterBar')?.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-scan-filter]');
-      if (!btn || !state.noteRawScanB64) return;
+      if (!btn) return;
       const mode = btn.dataset.scanFilter;
       $$('#noteScanFilterBar [data-scan-filter]').forEach((b) => b.classList.toggle('active', b === btn));
+      if (mode === 'retypeset') {
+        if (state.noteLayout && Array.isArray(state.noteLayout.blocks) && state.noteLayout.blocks.length) {
+          const rendered = renderCleanLayoutCanvas([state.noteLayout]);
+          if (rendered && rendered.dataUrl) {
+            state.noteScanFilter = 'retypeset';
+            setNoteImage(rendered.dataUrl);
+            setOcrStatus(`白底原位重排 · ${state.noteLayout.blocks.length} 处版面框 · 点击放大`);
+            return;
+          }
+        }
+        toast('当前图片暂无可用版面框');
+        return;
+      }
+      if (!state.noteRawScanB64) { toast('当前模式仅支持在原生扫描后切换'); return; }
       if (mode === 'original') {
         const rawUrl = state.noteRawScanB64.startsWith('data:') ? state.noteRawScanB64 : `data:image/jpeg;base64,${state.noteRawScanB64}`;
         state.noteScanFilter = 'original';
@@ -3404,6 +3449,8 @@
       if (bridge.available) {
         setOcrStatus('正在切换扫描滤镜…');
         bridge.post({ type: 'applyScanFilter', requestId: uid('flt'), imageBase64: state.noteRawScanB64, mode });
+      } else {
+        toast('黑白/增亮/灰度滤镜需在 iOS App 原生端使用');
       }
     });
     $('#noteScanPreviewImg')?.addEventListener('click', () => {
