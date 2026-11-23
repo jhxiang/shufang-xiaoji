@@ -399,6 +399,28 @@
       setNoteImage(dataUrl);
       runOcr(dataUrl);
     },
+    onDocumentScanned(firstPageBase64, text, pageCount) {
+      if (firstPageBase64) {
+        const dataUrl = String(firstPageBase64).startsWith('data:')
+          ? String(firstPageBase64)
+          : `data:image/jpeg;base64,${firstPageBase64}`;
+        setNoteImage(dataUrl);
+        if (state.noteType !== 'scan') {
+          state.noteType = 'scan';
+          $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'scan'));
+        }
+        const cleaned = String(text || '').trim();
+        if (cleaned) {
+          appendToNoteText(cleaned);
+          setOcrStatus(`扫描全能王识别完成（${pageCount || 1} 页 · ${cleaned.length} 字）`);
+          toast(`已扫描 ${pageCount || 1} 页并提取 ${cleaned.length} 字`);
+        } else {
+          // 离线 Vision 未提取到文字时自动降级云端视觉大模型 / OCR.space
+          setOcrStatus('正在云端加强识别扫描页…');
+          runOcr(dataUrl, { skipApple: true });
+        }
+      }
+    },
   };
 
   // 原生端可主动触发落盘（App 切后台 / 即将退出）
@@ -2884,7 +2906,7 @@
     });
   }
 
-  async function runOcr(dataUrl) {
+  async function runOcr(dataUrl, opts = {}) {
     if (!dataUrl) return;
     const ocrCfg = getMeta('ocrConfig', { mode: 'auto', ocrSpaceKeys: [] }) || { mode: 'auto', ocrSpaceKeys: [] };
     const mode = ocrCfg.mode || 'auto';
@@ -2894,7 +2916,7 @@
 
     setOcrStatus('正在识别书页文字…');
     for (const engine of order) {
-      if (engine === 'apple' && bridge.available) {
+      if (engine === 'apple' && bridge.available && !opts.skipApple) {
         const base64 = dataUrl.split(',')[1] || '';
         const ok = bridge.post({ type: 'recognizeOcr', imageBase64: base64, languages: ['zh-Hans', 'en-US'] });
         if (ok) return;
@@ -2976,16 +2998,31 @@
     throw lastErr || new Error('OCR.space 识别失败');
   }
 
+  function triggerBookPageScan() {
+    if (bridge.available) {
+      // iOS 原生唤起 VisionKit 文档扫描仪（扫描全能王级：自动识别边缘、透视拉直、去阴影、支持多页连续扫描）
+      const ok = bridge.post({ type: 'scanDocument' });
+      if (ok) return;
+    }
+    const input = $('#notePhotoInput');
+    if (input) {
+      input.setAttribute('capture', 'environment');
+      input.click();
+      setTimeout(() => input.removeAttribute('capture'), 500);
+    }
+  }
+
   function bindNoteEditor() {
     $('#noteTypeRow')?.addEventListener('click', (e) => {
       const tag = e.target.closest('[data-note-type]');
       if (!tag) return;
       state.noteType = tag.dataset.noteType;
       $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t === tag));
-      if (state.noteType === 'scan') $('#notePhotoInput')?.click();
+      if (state.noteType === 'scan') triggerBookPageScan();
     });
     $('#voiceInputBtn')?.addEventListener('click', startDictation);
-    $('#scanPhotoBtn')?.addEventListener('click', () => {
+    $('#scanPhotoBtn')?.addEventListener('click', triggerBookPageScan);
+    $('#albumPhotoBtn')?.addEventListener('click', () => {
       $('#notePhotoInput')?.click();
     });
     $('#notePhotoInput')?.addEventListener('change', async (e) => {
@@ -4293,7 +4330,7 @@
             </div>
             <button type="button" class="text-link-btn danger" data-del-ai-pool="${idx}">移除</button>
           </div>`).join('')
-        : '<div class="inline-empty">暂未添加模型，点上方「智谱免费」等预设即可一键填好参数，再粘贴免费 Key 即可使用。</div>';
+        : '<div class="inline-empty">当前已默认启用「内置免 Key 公共开源模型」（开箱即用）；如需更稳定高速或视觉大模型，可在上方粘贴你自己的 Key 与 API 地址，将优先使用你的引擎池。</div>';
     }
 
     const ocrCfg = getMeta('ocrConfig', { mode: 'auto', ocrSpaceKeys: [] }) || {};
@@ -4567,12 +4604,23 @@
     return [];
   }
 
+  const BUILTIN_FREE_AI = {
+    id: 'builtin-free',
+    name: '内置免费公共模型（免 Key 开箱即用）',
+    model: 'openai',
+    visionModel: '',
+    url: 'https://text.pollinations.ai/openai',
+    keys: [''],
+    noAuth: true,
+  };
+
   async function callDoubao(messages, opts = {}) {
-    const pool = getAiPool();
-    if (!pool.length) throw new Error('请先在「设置」添加免费大模型 Key');
+    const userPool = getAiPool();
     const needVision = Boolean(opts.vision);
-    const candidates = needVision ? pool.filter((p) => p.visionModel) : pool;
-    if (!candidates.length) throw new Error('引擎池里尚未配置视觉识图模型（如智谱 glm-4v-flash）');
+    const candidates = needVision
+      ? userPool.filter((p) => p.visionModel)
+      : [...userPool, BUILTIN_FREE_AI];
+    if (!candidates.length) throw new Error('尚未配置视觉识图模型（可在设置中填入智谱 glm-4v-flash 免费 Key）');
 
     let lastErr = null;
     for (const provider of candidates) {
@@ -4586,12 +4634,11 @@
             temperature: opts.temperature == null ? 0.6 : opts.temperature,
             max_tokens: opts.maxTokens || 1500,
           });
+          const headers = { 'Content-Type': 'application/json' };
+          if (apiKey && !provider.noAuth) headers.Authorization = `Bearer ${apiKey}`;
           const data = await requestJson(url, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
-            },
+            headers,
             body,
             timeout: 45000,
           });
@@ -4603,7 +4650,7 @@
         }
       }
     }
-    throw lastErr || new Error('所有可用模型 Key 均调用失败');
+    throw lastErr || new Error('所有可用模型均调用失败，请稍后重试');
   }
 
   function libraryDigest() {
@@ -4614,12 +4661,6 @@
   }
 
   async function aiRecommendBooks() {
-    if (!getAiPool().length) {
-      toast('请先在「设置」添加免费大模型 Key（如智谱 glm-4-flash）');
-      switchTab('settings');
-      setTimeout(() => $('#doubaoKeyInput')?.focus(), 400);
-      return;
-    }
     const btn = $('#aiRecommendBtn');
     const original = btn ? btn.textContent : '';
     if (btn) { btn.textContent = '荐书中…'; btn.disabled = true; }
@@ -4685,12 +4726,6 @@ ${libraryDigest() || '（还没有阅读记录）'}
   }
 
   async function aiGenerateInsight() {
-    if (!getAiPool().length) {
-      toast('请先在「设置」添加免费大模型 Key（如智谱 glm-4-flash）');
-      switchTab('settings');
-      setTimeout(() => $('#doubaoKeyInput')?.focus(), 400);
-      return;
-    }
     const btn = $('#aiInsightBtn');
     const original = btn ? btn.textContent : '';
     if (btn) { btn.textContent = '分析中…'; btn.disabled = true; }

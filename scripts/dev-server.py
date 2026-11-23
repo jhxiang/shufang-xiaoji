@@ -19,6 +19,8 @@ ALLOWED_HOSTS = {
     'itunes.apple.com',
     'www.googleapis.com',
     'openlibrary.org',
+    'text.pollinations.ai',
+    'api.ocr.space',
 }
 
 

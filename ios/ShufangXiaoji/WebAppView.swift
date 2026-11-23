@@ -18,6 +18,7 @@ import SwiftUI
 import UIKit
 import WebKit
 import PhotosUI
+import VisionKit
 
 struct WebAppView: UIViewControllerRepresentable {
     @EnvironmentObject private var themeStore: ThemeStore
@@ -233,6 +234,8 @@ extension WebAppViewController: WKScriptMessageHandler {
             handleSetTheme(body)
         case "pickPhoto":
             presentPhotoPicker(camera: body["camera"] as? Bool ?? false, completion: nil)
+        case "scanDocument":
+            presentDocumentScanner()
         case "saveSnapshot":
             if let data = body["data"] as? String, !data.isEmpty {
                 PersistentStore.shared.saveSnapshot(data)
@@ -494,6 +497,75 @@ extension WebAppViewController: PHPickerViewControllerDelegate, UIImagePickerCon
 
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
         picker.dismiss(animated: true)
+    }
+
+    // MARK: Document Scanner (扫描全能王级：自动边缘检测 + 透视拉直 + 去阴影 + 多页连续扫描)
+
+    func presentDocumentScanner() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if VNDocumentCameraViewController.isSupported {
+                let scanner = VNDocumentCameraViewController()
+                scanner.delegate = self
+                self.present(scanner, animated: true)
+            } else {
+                // 设备不支持文档扫描仪时自动降级到普通相机/相册
+                self.presentPhotoPicker(camera: UIImagePickerController.isSourceTypeAvailable(.camera), completion: nil)
+            }
+        }
+    }
+}
+
+extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
+
+    func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
+        controller.dismiss(animated: true)
+    }
+
+    func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
+        controller.dismiss(animated: true)
+        NSLog("[小象阅痕] 文档扫描失败: %@", error.localizedDescription)
+        runJS("ShufangNative && ShufangNative.onOcrResult('', false)")
+    }
+
+    func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+        controller.dismiss(animated: true)
+        let pageCount = scan.pageCount
+        guard pageCount > 0 else { return }
+
+        // 先取首页做压缩预览图
+        var pagesBase64: [String] = []
+        for idx in 0..<pageCount {
+            let img = scan.imageOfPage(at: idx)
+            if let data = img.jpegData(compressionQuality: 0.78) {
+                pagesBase64.append(data.base64EncodedString())
+            }
+        }
+        guard let firstBase64 = pagesBase64.first else { return }
+
+        // 逐页使用 Apple Vision 离线识别中文，再按页顺序拼接
+        let group = DispatchGroup()
+        var results = Array(repeating: "", count: pagesBase64.count)
+        let lock = NSLock()
+
+        for (idx, b64) in pagesBase64.enumerated() {
+            group.enter()
+            VisionOCR.recognize(imageBase64: b64, languages: ["zh-Hans", "en-US"]) { text in
+                if let t = text, !t.isEmpty {
+                    lock.lock()
+                    results[idx] = t
+                    lock.unlock()
+                }
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .main) { [weak self] in
+            guard let self = self else { return }
+            let combined = results.filter { !$0.isEmpty }.joined(separator: "\n\n")
+            let js = "ShufangNative && ShufangNative.onDocumentScanned && ShufangNative.onDocumentScanned(\(self.jsLiteral(firstBase64)), \(self.jsLiteral(combined)), \(pageCount))"
+            self.runJS(js)
+        }
     }
 }
 
