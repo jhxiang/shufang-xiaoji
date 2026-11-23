@@ -1,9 +1,10 @@
 //
 //  VisionOCR.swift
-//  Apple Vision 框架文字识别与版面框定位 + CoreImage「WPS 扫描级」纸质变电子文档增强引擎：
-//  1. 先对扫描书页做 GPU 加速的「自适应光照去阴影 + 纸张漂白 + 文字锐化」（保留真实印刷字、插图与批注，去除黄底/暗角/阴影噪点）；
-//  2. 再在电子文档图上跑 Vision OCR 提取 1:1 精确归一化版面坐标 (x, y, w, h)，
-//     形成类似 WPS 双层电子文档的体验：视觉上是超清电子文档原图，点击放大后可直接点选/复制版面文字。
+//  Apple Vision 框架文字识别与版面框定位 + WPS 扫描级 4 模式文档滤镜：
+//   - magic    : Apple 原生 CIDocumentEnhancer（彩色增亮：去阴影提亮白底，100% 保留身份证头像/彩色插图/批注原色）
+//   - bw       : 黑白文档（CIDivideBlendMode 光照归一化 + CIToneCurve，纯白底浓黑字，适合手写笔记/黑白书页）
+//   - gray     : 柔和灰度（CIPhotoEffectMono + 温和提亮）
+//   - original : 扫描仪拉直裁边后的原始照片（零修改）
 //
 
 import Foundation
@@ -18,77 +19,102 @@ enum VisionOCR {
         let width: Int
         let height: Int
         let aspectRatio: Double
+        let rawBase64: String?
         let enhancedBase64: String?
+        let filterMode: String
         let blocks: [[String: Any]]
     }
 
     private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
-    /// WPS 扫描级「纸质变电子文档」增强：
-    /// 局部光照归一化（原图 ÷ 大半径模糊背景）彻底消除阴影、暗角与发黄纸底，
-    /// 保留真实印刷文字、插图与彩色批注，再做纸白提亮与文字锐化。
-    static func enhanceToElectronicDocument(_ rawImage: UIImage) -> UIImage {
+    /// 应用 WPS 同款 4 档扫描滤镜
+    static func applyDocumentFilter(_ rawImage: UIImage, mode: String) -> UIImage {
         let image = normalizedUpImage(rawImage)
+        if mode == "original" { return image }
         guard let cgImage = image.cgImage else { return image }
 
         let input = CIImage(cgImage: cgImage)
         let extent = input.extent
-        let blurRadius = max(24.0, min(90.0, Double(min(extent.width, extent.height)) * 0.04))
+        var current = input
 
-        // 1. 估计局部纸张光照与阴影背景
-        let clamped = input.clampedToExtent()
-        guard let blurFilter = CIFilter(name: "CIGaussianBlur") else { return image }
-        blurFilter.setValue(clamped, forKey: kCIInputImageKey)
-        blurFilter.setValue(blurRadius, forKey: kCIInputRadiusKey)
-        guard let blurred = blurFilter.outputImage?.cropped(to: extent) else { return image }
+        switch mode {
+        case "bw":
+            // 黑白文档模式（适合白纸黑字手写笔记、数学公式、纯文字书页）
+            let blurRadius = max(24.0, min(90.0, Double(min(extent.width, extent.height)) * 0.04))
+            let blurred = input.clampedToExtent()
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: blurRadius])
+                .cropped(to: extent)
+            // CoreImage CIDivideBlendMode = background / input
+            current = blurred.applyingFilter("CIDivideBlendMode", parameters: [
+                kCIInputBackgroundImageKey: input
+            ]).cropped(to: extent)
+            current = current.applyingFilter("CIColorControls", parameters: [
+                kCIInputSaturationKey: 0.0,
+                kCIInputContrastKey: 1.0,
+                kCIInputBrightnessKey: 0.0,
+            ]).cropped(to: extent)
+            current = current.applyingFilter("CIToneCurve", parameters: [
+                "inputPoint0": CIVector(x: 0.0, y: 0.0),
+                "inputPoint1": CIVector(x: 0.46, y: 0.01),
+                "inputPoint2": CIVector(x: 0.72, y: 0.42),
+                "inputPoint3": CIVector(x: 0.91, y: 0.99),
+                "inputPoint4": CIVector(x: 1.0, y: 1.0),
+            ]).cropped(to: extent)
+            current = current.applyingFilter("CISharpenLuminance", parameters: [
+                kCIInputSharpnessKey: 0.45
+            ]).cropped(to: extent)
 
-        // 2. 光照除法归一化（CoreImage CIDivideBlendMode 公式为 background / input，
-        //    因此 background=原图, input=模糊光照背景，阴影与泛黄底色自动趋近纯白 1.0）
-        guard let divideFilter = CIFilter(name: "CIDivideBlendMode") else { return image }
-        divideFilter.setValue(blurred, forKey: kCIInputImageKey)
-        divideFilter.setValue(input, forKey: kCIInputBackgroundImageKey)
-        guard let normalized = divideFilter.outputImage?.cropped(to: extent) else { return image }
-
-        // 3. 转为高净度灰度，彻底消除纸张偏黄/边角偏蓝底色
-        var current = normalized
-        if let grayFilter = CIFilter(name: "CIColorControls") {
-            grayFilter.setValue(current, forKey: kCIInputImageKey)
-            grayFilter.setValue(0.0, forKey: kCIInputSaturationKey)
-            grayFilter.setValue(1.0, forKey: kCIInputContrastKey)
-            grayFilter.setValue(0.0, forKey: kCIInputBrightnessKey)
-            if let out = grayFilter.outputImage?.cropped(to: extent) {
-                current = out
+        case "gray":
+            // 柔和灰度模式：保留照片与纸张层次，不丢细节
+            if let mono = CIFilter(name: "CIPhotoEffectMono") {
+                mono.setValue(current, forKey: kCIInputImageKey)
+                if let out = mono.outputImage?.cropped(to: extent) { current = out }
             }
-        }
+            current = current.applyingFilter("CIColorControls", parameters: [
+                kCIInputContrastKey: 1.15,
+                kCIInputBrightnessKey: 0.04,
+            ]).cropped(to: extent)
 
-        // 4. WPS 级黑白文档色阶曲线：深色笔迹压成浓黑，纸底与阴影彻底漂白为纯白 #FFFFFF
-        if let toneCurve = CIFilter(name: "CIToneCurve") {
-            toneCurve.setValue(current, forKey: kCIInputImageKey)
-            toneCurve.setValue(CIVector(x: 0.0, y: 0.0), forKey: "inputPoint0")
-            toneCurve.setValue(CIVector(x: 0.46, y: 0.01), forKey: "inputPoint1")
-            toneCurve.setValue(CIVector(x: 0.72, y: 0.42), forKey: "inputPoint2")
-            toneCurve.setValue(CIVector(x: 0.91, y: 0.99), forKey: "inputPoint3")
-            toneCurve.setValue(CIVector(x: 1.0, y: 1.0), forKey: "inputPoint4")
-            if let out = toneCurve.outputImage?.cropped(to: extent) {
-                current = out
+        default:
+            // magic（默认：Apple 原生 CIDocumentEnhancer 彩色增亮，拍身份证/彩色书页/插图绝不糊脸、保留原色）
+            if let docFilter = CIFilter(name: "CIDocumentEnhancer") {
+                docFilter.setValue(current, forKey: kCIInputImageKey)
+                docFilter.setValue(1.0, forKey: "inputAmount")
+                if let out = docFilter.outputImage?.cropped(to: extent) {
+                    current = out
+                }
+            } else {
+                current = current.applyingFilter("CIColorControls", parameters: [
+                    kCIInputContrastKey: 1.18,
+                    kCIInputBrightnessKey: 0.05,
+                    kCIInputSaturationKey: 1.05,
+                ]).cropped(to: extent)
             }
-        }
-
-        // 5. 轻度锐化笔锋，让手写与印刷字边缘更清晰
-        if let sharpen = CIFilter(name: "CISharpenLuminance") {
-            sharpen.setValue(current, forKey: kCIInputImageKey)
-            sharpen.setValue(0.45, forKey: kCIInputSharpnessKey)
-            if let out = sharpen.outputImage?.cropped(to: extent) {
-                current = out
-            }
+            current = current.applyingFilter("CISharpenLuminance", parameters: [
+                kCIInputSharpnessKey: 0.25
+            ]).cropped(to: extent)
         }
 
         guard let outCG = ciContext.createCGImage(current, from: extent) else { return image }
         return UIImage(cgImage: outCG, scale: image.scale, orientation: .up)
     }
 
-    /// 先增强为电子文档原图，再识别图片中的文字及其 1:1 精确版面坐标（左上角原点归一化 0..1）
-    static func recognizeLayout(imageBase64: String, languages: [String], enhance: Bool = true, completion: @escaping (LayoutResult?) -> Void) {
+    /// 对已有扫描原图异步切换滤镜（供前端毫秒级切换 4 档滤镜）
+    static func applyFilterToBase64(_ base64: String, mode: String, completion: @escaping (String?) -> Void) {
+        guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters),
+              let rawImage = UIImage(data: data) else {
+            completion(nil)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let processed = applyDocumentFilter(rawImage, mode: mode)
+            let outB64 = processed.jpegData(compressionQuality: 0.86)?.base64EncodedString()
+            DispatchQueue.main.async { completion(outB64) }
+        }
+    }
+
+    /// 应用默认彩色增亮滤镜，并识别图片中的文字及其 1:1 精确版面坐标（左上角原点归一化 0..1）
+    static func recognizeLayout(imageBase64: String, languages: [String], filterMode: String = "magic", completion: @escaping (LayoutResult?) -> Void) {
         guard let data = Data(base64Encoded: imageBase64, options: .ignoreUnknownCharacters),
               let rawImage = UIImage(data: data) else {
             completion(nil)
@@ -96,7 +122,9 @@ enum VisionOCR {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let processed = enhance ? enhanceToElectronicDocument(rawImage) : normalizedUpImage(rawImage)
+            let normalizedRaw = normalizedUpImage(rawImage)
+            let rawB64 = normalizedRaw.jpegData(compressionQuality: 0.82)?.base64EncodedString()
+            let processed = applyDocumentFilter(normalizedRaw, mode: filterMode)
             guard let cgImage = processed.cgImage else {
                 DispatchQueue.main.async { completion(nil) }
                 return
@@ -105,7 +133,7 @@ enum VisionOCR {
             let imgW = cgImage.width
             let imgH = cgImage.height
             let aspectRatio = (imgW > 0 && imgH > 0) ? (Double(imgW) / Double(imgH)) : 0.72
-            let enhancedB64 = processed.jpegData(compressionQuality: 0.84)?.base64EncodedString()
+            let enhancedB64 = processed.jpegData(compressionQuality: 0.86)?.base64EncodedString()
 
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
@@ -166,20 +194,23 @@ enum VisionOCR {
                     width: imgW,
                     height: imgH,
                     aspectRatio: aspectRatio,
+                    rawBase64: rawB64,
                     enhancedBase64: enhancedB64,
+                    filterMode: filterMode,
                     blocks: blocks
                 )
                 DispatchQueue.main.async {
                     completion(res)
                 }
             } catch {
-                // 即使 OCR 失败，也返回去阴影增白后的电子文档图
                 let res = LayoutResult(
                     text: "",
                     width: imgW,
                     height: imgH,
                     aspectRatio: aspectRatio,
+                    rawBase64: rawB64,
                     enhancedBase64: enhancedB64,
+                    filterMode: filterMode,
                     blocks: []
                 )
                 DispatchQueue.main.async { completion(res) }
@@ -189,7 +220,7 @@ enum VisionOCR {
 
     /// 兼容旧接口：只返回拼接文本
     static func recognize(imageBase64: String, languages: [String], completion: @escaping (String?) -> Void) {
-        recognizeLayout(imageBase64: imageBase64, languages: languages, enhance: false) { res in
+        recognizeLayout(imageBase64: imageBase64, languages: languages, filterMode: "original") { res in
             guard let res = res, !res.text.isEmpty else {
                 completion(nil)
                 return

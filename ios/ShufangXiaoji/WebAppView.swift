@@ -236,6 +236,8 @@ extension WebAppViewController: WKScriptMessageHandler {
             presentPhotoPicker(camera: body["camera"] as? Bool ?? false, completion: nil)
         case "scanDocument":
             presentDocumentScanner()
+        case "applyScanFilter":
+            handleApplyScanFilter(body)
         case "saveSnapshot":
             if let data = body["data"] as? String, !data.isEmpty {
                 PersistentStore.shared.saveSnapshot(data)
@@ -337,7 +339,8 @@ extension WebAppViewController: WKScriptMessageHandler {
             return
         }
         let languages = (body["languages"] as? [String]) ?? ["zh-Hans", "en-US"]
-        VisionOCR.recognizeLayout(imageBase64: base64, languages: languages, enhance: true) { [weak self] res in
+        let filterMode = (body["filterMode"] as? String) ?? "magic"
+        VisionOCR.recognizeLayout(imageBase64: base64, languages: languages, filterMode: filterMode) { [weak self] res in
             guard let self = self else { return }
             if let res = res {
                 let docB64 = res.enhancedBase64 ?? base64
@@ -345,6 +348,9 @@ extension WebAppViewController: WKScriptMessageHandler {
                     "width": res.width,
                     "height": res.height,
                     "aspectRatio": res.aspectRatio,
+                    "filterMode": res.filterMode,
+                    "rawBase64": res.rawBase64 ?? base64,
+                    "imageBase64": docB64,
                     "blocks": res.blocks,
                 ]
                 let layoutJson: String
@@ -359,6 +365,17 @@ extension WebAppViewController: WKScriptMessageHandler {
             } else {
                 self.runJS("ShufangNative && ShufangNative.onOcrResult('', false)")
             }
+        }
+    }
+
+    private func handleApplyScanFilter(_ body: [String: Any]) {
+        guard let base64 = body["imageBase64"] as? String, !base64.isEmpty,
+              let mode = body["mode"] as? String else { return }
+        let requestId = (body["requestId"] as? String) ?? ""
+        VisionOCR.applyFilterToBase64(base64, mode: mode) { [weak self] outB64 in
+            guard let self = self, let outB64 = outB64 else { return }
+            let js = "ShufangNative && ShufangNative.onScanFilterApplied && ShufangNative.onScanFilterApplied(\(self.jsLiteral(requestId)), \(self.jsLiteral(outB64)), \(self.jsLiteral(mode)))"
+            self.runJS(js)
         }
     }
 
@@ -560,7 +577,7 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
         }
         guard let firstBase64 = pagesBase64.first else { return }
 
-        // 逐页做 WPS 扫描级「去阴影增白电子文档化」+ Vision 离线精确版面框 (x, y, w, h + text)
+        // 逐页做 WPS 扫描级默认「彩色增亮(CIDocumentEnhancer)」+ 保留原图供 4 档滤镜实时切换 + Vision 1:1 版面框
         let group = DispatchGroup()
         var pageLayouts: [[String: Any]?] = Array(repeating: nil, count: pagesBase64.count)
         var enhancedPages: [String?] = Array(repeating: nil, count: pagesBase64.count)
@@ -568,7 +585,7 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
 
         for (idx, b64) in pagesBase64.enumerated() {
             group.enter()
-            VisionOCR.recognizeLayout(imageBase64: b64, languages: ["zh-Hans", "en-US"], enhance: true) { res in
+            VisionOCR.recognizeLayout(imageBase64: b64, languages: ["zh-Hans", "en-US"], filterMode: "magic") { res in
                 if let res = res {
                     lock.lock()
                     enhancedPages[idx] = res.enhancedBase64 ?? b64
@@ -576,8 +593,10 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
                         "width": res.width,
                         "height": res.height,
                         "aspectRatio": res.aspectRatio,
-                        "blocks": res.blocks,
+                        "filterMode": res.filterMode,
+                        "rawBase64": res.rawBase64 ?? b64,
                         "imageBase64": res.enhancedBase64 ?? b64,
+                        "blocks": res.blocks,
                     ]
                     lock.unlock()
                 }

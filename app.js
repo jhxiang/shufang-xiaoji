@@ -399,6 +399,16 @@
       setNoteImage(dataUrl);
       runOcr(dataUrl);
     },
+    onScanFilterApplied(requestId, outBase64, mode) {
+      if (!outBase64) return;
+      const dataUrl = String(outBase64).startsWith('data:') ? String(outBase64) : `data:image/jpeg;base64,${outBase64}`;
+      state.noteScanFilter = mode || 'magic';
+      setNoteImage(dataUrl);
+      const labels = { magic: '智能增亮（保留原色）', bw: '黑白电子文档', gray: '柔和灰度', original: '扫描原图' };
+      const cnt = (state.noteLayout && state.noteLayout.blocks) ? state.noteLayout.blocks.length : 0;
+      setOcrStatus(`${labels[mode] || '已切换滤镜'}${cnt ? ` · ${cnt} 处可点选文字` : ''} · 点击放大`);
+      $$('#noteScanFilterBar [data-scan-filter]').forEach((b) => b.classList.toggle('active', b.dataset.scanFilter === state.noteScanFilter));
+    },
     onDocumentLayoutScanned(firstPageBase64, layoutJson, pageCount) {
       let pages = [];
       try { pages = JSON.parse(String(layoutJson || '[]')); } catch { pages = []; }
@@ -410,12 +420,14 @@
         $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'scan'));
       }
 
-      // 单页：直接使用 WPS 级去阴影增白后的高清电子文档原图 + 1:1 对齐的透明可复制版面框
+      // 单页：默认用 Apple CIDocumentEnhancer 彩色增亮（身份证/彩图绝不糊脸），同时显示 4 档滤镜条供一键切黑白文档/原图
       if (Array.isArray(pages) && pages.length === 1) {
         const p = pages[0];
         const pageImg = p.imageBase64
           ? (String(p.imageBase64).startsWith('data:') ? String(p.imageBase64) : `data:image/jpeg;base64,${p.imageBase64}`)
           : primaryDataUrl;
+        state.noteRawScanB64 = p.rawBase64 || '';
+        state.noteScanFilter = p.filterMode || 'magic';
         if (pageImg) {
           const blocks = Array.isArray(p.blocks) ? p.blocks : [];
           state.noteLayout = {
@@ -425,8 +437,10 @@
             blocks,
           };
           setNoteImage(pageImg);
-          setOcrStatus(`已转为电子文档（${blocks.length} 处可点选文字 · 点击放大）`);
-          toast('已生成电子文档扫描件，点击可放大与复制文字');
+          $('#noteScanFilterBar')?.classList.toggle('hidden', !state.noteRawScanB64);
+          $$('#noteScanFilterBar [data-scan-filter]').forEach((b) => b.classList.toggle('active', b.dataset.scanFilter === state.noteScanFilter));
+          setOcrStatus(`智能增亮（保留原色）· ${blocks.length} 处可点选文字 · 点击放大`);
+          toast('扫描完成，可一键切换「增亮 / 黑白文档 / 灰度 / 原图」');
           return;
         }
       }
@@ -507,6 +521,8 @@
     noteType: 'reflection',
     noteImage: null,
     noteLayout: null,
+    noteRawScanB64: '',
+    noteScanFilter: 'magic',
     lightboxLayout: null,
     charBookId: null,
     editingCharId: null,
@@ -2842,6 +2858,9 @@
     state.noteType = 'reflection';
     state.noteImage = null;
     state.noteLayout = null;
+    state.noteRawScanB64 = '';
+    state.noteScanFilter = 'magic';
+    $('#noteScanFilterBar')?.classList.add('hidden');
     $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'reflection'));
     $('#noteContentInput').value = '';
     $('#notePageInput').value = '';
@@ -3337,8 +3356,27 @@
     $('#removeNotePhotoBtn')?.addEventListener('click', () => {
       setNoteImage(null);
       state.noteLayout = null;
+      state.noteRawScanB64 = '';
+      $('#noteScanFilterBar')?.classList.add('hidden');
       $('#notePhotoInput').value = '';
       setOcrStatus('扫描图已移除');
+    });
+    $('#noteScanFilterBar')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-scan-filter]');
+      if (!btn || !state.noteRawScanB64) return;
+      const mode = btn.dataset.scanFilter;
+      $$('#noteScanFilterBar [data-scan-filter]').forEach((b) => b.classList.toggle('active', b === btn));
+      if (mode === 'original') {
+        const rawUrl = state.noteRawScanB64.startsWith('data:') ? state.noteRawScanB64 : `data:image/jpeg;base64,${state.noteRawScanB64}`;
+        state.noteScanFilter = 'original';
+        setNoteImage(rawUrl);
+        setOcrStatus('扫描原图 · 点击放大');
+        return;
+      }
+      if (bridge.available) {
+        setOcrStatus('正在切换扫描滤镜…');
+        bridge.post({ type: 'applyScanFilter', requestId: uid('flt'), imageBase64: state.noteRawScanB64, mode });
+      }
     });
     $('#noteScanPreviewImg')?.addEventListener('click', () => {
       if (state.noteImage) openScanLightbox(state.noteImage, state.noteLayout);
