@@ -2599,6 +2599,43 @@ textarea.form-control {
   word-break: break-word;
 }
 
+.ai-pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-pool-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.ai-pool-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.ai-pool-meta strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.ai-pool-meta small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Reading Log Items */
 .session-row {
   display: flex;

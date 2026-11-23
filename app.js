@@ -2885,41 +2885,94 @@
 
   async function runOcr(dataUrl) {
     if (!dataUrl) return;
-    setOcrStatus('正在识别文字…');
-    if (bridge.available) {
-      const base64 = dataUrl.split(',')[1] || '';
-      const ok = bridge.post({ type: 'recognizeOcr', imageBase64: base64, languages: ['zh-Hans', 'en-US'] });
-      if (ok) return;
-    }
-    const ai = getMeta('ai', null);
-    if (ai && ai.key) {
-      try {
-        const text = await ocrWithDoubao(dataUrl, ai);
-        if (text) {
-          appendToNoteText(text);
-          setOcrStatus(`已用豆包识别 · ${text.length} 字`);
-          toast('扫描文字已提取');
-        } else {
-          setOcrStatus('未识别到文字，可手动补充');
-        }
-      } catch (err) {
-        setOcrStatus('识别失败，请检查豆包 Key 或手动输入');
+    const ocrCfg = getMeta('ocrConfig', { mode: 'auto', ocrSpaceKeys: [] }) || { mode: 'auto', ocrSpaceKeys: [] };
+    const mode = ocrCfg.mode || 'auto';
+    const order = mode === 'vision_ai'
+      ? ['vision_ai', 'apple', 'ocrspace']
+      : (mode === 'ocrspace' ? ['ocrspace', 'apple', 'vision_ai'] : ['apple', 'vision_ai', 'ocrspace']);
+
+    setOcrStatus('正在识别书页文字…');
+    for (const engine of order) {
+      if (engine === 'apple' && bridge.available) {
+        const base64 = dataUrl.split(',')[1] || '';
+        const ok = bridge.post({ type: 'recognizeOcr', imageBase64: base64, languages: ['zh-Hans', 'en-US'] });
+        if (ok) return;
       }
-      return;
+      if (engine === 'vision_ai') {
+        const visionNodes = getAiPool().filter((p) => p.visionModel && p.keys.length);
+        if (visionNodes.length) {
+          try {
+            setOcrStatus('正在用免费视觉大模型识别…');
+            const text = await ocrWithVisionPool(dataUrl);
+            if (text) {
+              appendToNoteText(text);
+              setOcrStatus(`视觉大模型识别完成 · ${text.length} 字`);
+              toast('扫描文字已提取');
+              return;
+            }
+          } catch { /* fallback to next engine */ }
+        }
+      }
+      if (engine === 'ocrspace') {
+        try {
+          setOcrStatus('正在用免费 OCR.space API 识别…');
+          const text = await ocrWithOcrSpace(dataUrl);
+          if (text) {
+            appendToNoteText(text);
+            setOcrStatus(`OCR.space 识别完成 · ${text.length} 字`);
+            toast('扫描文字已提取');
+            return;
+          }
+        } catch { /* fallback to next engine */ }
+      }
     }
-    setOcrStatus('已保存扫描图（当前环境无 OCR，可打字补充或配置豆包 Key）');
-    toast('图片已保存；配置豆包 Key 后可自动提取文字');
+    setOcrStatus('未能自动识别文字，可手动输入或在「设置」配置视觉大模型 / OCR Key');
+    toast('图片已保存；可手动补充或在设置添加免费 OCR Key');
   }
 
-  async function ocrWithDoubao(dataUrl, ai) {
+  async function ocrWithVisionPool(dataUrl) {
     const content = await callDoubao([
-      { role: 'system', content: '你是中文 OCR 助手，只输出图片中的文字，保持段落，不要解释。' },
+      { role: 'system', content: '你是中文读书笔记 OCR 助手，只准确输出图片中的正文文字，自动去掉页眉页码并整理好换行，不要任何解释。' },
       { role: 'user', content: [
         { type: 'image_url', image_url: { url: dataUrl } },
-        { type: 'text', text: '请提取这张读书笔记图片中的所有文字。' },
+        { type: 'text', text: '请准确提取这张读书笔记/书页图片中的文字。' },
       ] },
-    ], { ai, maxTokens: 1200 });
+    ], { vision: true, maxTokens: 1400, temperature: 0.2 });
     return String(content || '').trim();
+  }
+
+  async function ocrWithOcrSpace(dataUrl) {
+    const ocrCfg = getMeta('ocrConfig', { mode: 'auto', ocrSpaceKeys: [] }) || {};
+    const userKeys = Array.isArray(ocrCfg.ocrSpaceKeys) ? ocrCfg.ocrSpaceKeys.filter(Boolean) : [];
+    const keys = userKeys.length ? [...userKeys, 'helloworld'] : ['helloworld'];
+    let lastErr = null;
+    for (const apiKey of keys) {
+      try {
+        const params = new URLSearchParams();
+        params.set('base64Image', dataUrl);
+        params.set('language', 'chs');
+        params.set('isOverlayRequired', 'false');
+        params.set('OCREngine', '2');
+        params.set('scale', 'true');
+        const data = await requestJson('https://api.ocr.space/parse/image', {
+          method: 'POST',
+          headers: {
+            apikey: apiKey,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: params.toString(),
+          timeout: 25000,
+        });
+        if (data && !data.IsErroredOnProcessing && Array.isArray(data.ParsedResults)) {
+          const text = data.ParsedResults.map((r) => String(r.ParsedText || '').trim()).filter(Boolean).join('\n').trim();
+          if (text) return text;
+        }
+        lastErr = new Error((data && data.ErrorMessage && data.ErrorMessage[0]) || 'OCR.space 未返回文字');
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('OCR.space 识别失败');
   }
 
   function bindNoteEditor() {
@@ -4227,19 +4280,26 @@
     const summary = $('#storageSummary');
     if (summary) summary.textContent = `${state.books.length} 本书 · ${state.sessions.length} 条记录 · 约 ${(bytes / 1024).toFixed(0)} KB`;
 
-    const ai = getMeta('ai', null);
-    const keyInput = $('#doubaoKeyInput');
-    const modelInput = $('#doubaoModelInput');
-    const urlInput = $('#doubaoUrlInput');
-    if (ai) {
-      if (keyInput) keyInput.value = ai.key || '';
-      if (modelInput) modelInput.value = ai.model || '';
-      if (urlInput) urlInput.value = ai.url || '';
-    } else {
-      if (keyInput) keyInput.value = '';
-      if (modelInput) modelInput.value = 'doubao-1-5-pro-32k-250115';
-      if (urlInput) urlInput.value = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
+    const pool = getAiPool();
+    const poolEl = $('#aiPoolList');
+    if (poolEl) {
+      poolEl.innerHTML = pool.length
+        ? pool.map((p, idx) => `
+          <div class="ai-pool-item">
+            <div class="ai-pool-meta">
+              <strong>${esc(p.name || '自定义模型')} · ${p.keys.length} 个 Key${p.visionModel ? ' · 含识图' : ''}</strong>
+              <small>${esc(p.model)}${p.visionModel ? ` / 视觉: ${esc(p.visionModel)}` : ''}</small>
+            </div>
+            <button type="button" class="text-link-btn danger" data-del-ai-pool="${idx}">移除</button>
+          </div>`).join('')
+        : '<div class="inline-empty">暂未添加模型，点上方「智谱免费」等预设即可一键填好参数，再粘贴免费 Key 即可使用。</div>';
     }
+
+    const ocrCfg = getMeta('ocrConfig', { mode: 'auto', ocrSpaceKeys: [] }) || {};
+    const ocrMode = $('#ocrModeSelect');
+    if (ocrMode) ocrMode.value = ocrCfg.mode || 'auto';
+    const ocrKeysInput = $('#ocrSpaceKeysInput');
+    if (ocrKeysInput) ocrKeysInput.value = (ocrCfg.ocrSpaceKeys || []).join('\n');
   }
 
   function downloadBlob(text, filename, mime = 'application/json') {
@@ -4324,7 +4384,7 @@
       sAdded++;
     }
     if (data.meta) {
-      for (const key of ['goal', 'plan', 'savedQuotes', 'theme']) {
+      for (const key of ['goal', 'plan', 'savedQuotes', 'theme', 'aiPool', 'ocrConfig']) {
         if (key in data.meta) await setMeta(key, data.meta[key]);
       }
       if (data.meta.theme) applyTheme();
@@ -4368,18 +4428,61 @@
       e.target.value = '';
     });
 
-    $('#saveDoubaoCfgBtn')?.addEventListener('click', async () => {
-      const key = ($('#doubaoKeyInput').value || '').trim();
-      const model = ($('#doubaoModelInput').value || '').trim() || 'doubao-1-5-pro-32k-250115';
-      const url = ($('#doubaoUrlInput').value || '').trim() || 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
-      if (!key) { toast('请填写火山方舟 API Key'); return; }
-      await setMeta('ai', { key, model, url });
-      toast('豆包配置已保存（仅存本机）');
+    $('#aiPresetTags')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-ai-preset]');
+      if (!btn) return;
+      const preset = AI_PROVIDER_PRESETS[btn.dataset.aiPreset];
+      if (!preset) return;
+      if ($('#aiProviderNameInput')) $('#aiProviderNameInput').value = preset.name;
+      if ($('#doubaoModelInput')) $('#doubaoModelInput').value = preset.model;
+      if ($('#aiVisionModelInput')) $('#aiVisionModelInput').value = preset.visionModel || '';
+      if ($('#doubaoUrlInput')) $('#doubaoUrlInput').value = preset.url;
+      $('#doubaoKeyInput')?.focus();
+      toast(`已填入「${preset.name}」参数，粘贴 Key 后点保存即可`);
     });
+
+    $('#saveDoubaoCfgBtn')?.addEventListener('click', async () => {
+      const keys = parseKeysList($('#doubaoKeyInput')?.value || '');
+      const name = ($('#aiProviderNameInput')?.value || '').trim() || '自定义大模型';
+      const model = ($('#doubaoModelInput')?.value || '').trim() || 'glm-4-flash';
+      const visionModel = ($('#aiVisionModelInput')?.value || '').trim();
+      const url = ($('#doubaoUrlInput')?.value || '').trim() || 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+      if (!keys.length) { toast('请至少填写一个 API Key'); return; }
+      const pool = getAiPool().filter((p) => !(p.url === url && p.model === model));
+      pool.unshift({ id: uid('ai'), name, model, visionModel, url, keys });
+      await setMeta('aiPool', pool);
+      await setMeta('ai', { key: keys[0], model, visionModel, url, name });
+      if ($('#doubaoKeyInput')) $('#doubaoKeyInput').value = '';
+      renderSettings();
+      toast(`已保存「${name}」（${keys.length} 个 Key）到引擎池`);
+    });
+
+    $('#aiPoolList')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-del-ai-pool]');
+      if (!btn) return;
+      const idx = parseInt(btn.dataset.delAiPool, 10);
+      const pool = getAiPool();
+      if (!Number.isNaN(idx) && pool[idx]) {
+        pool.splice(idx, 1);
+        await setMeta('aiPool', pool);
+        await setMeta('ai', pool[0] ? { key: pool[0].keys[0], model: pool[0].model, visionModel: pool[0].visionModel, url: pool[0].url, name: pool[0].name } : null);
+        renderSettings();
+        toast('已移除该模型引擎');
+      }
+    });
+
     $('#clearDoubaoCfgBtn')?.addEventListener('click', async () => {
+      await setMeta('aiPool', []);
       await setMeta('ai', null);
       renderSettings();
-      toast('已清除豆包配置');
+      toast('已清空大模型引擎池');
+    });
+
+    $('#saveOcrCfgBtn')?.addEventListener('click', async () => {
+      const mode = $('#ocrModeSelect')?.value || 'auto';
+      const ocrSpaceKeys = parseKeysList($('#ocrSpaceKeysInput')?.value || '');
+      await setMeta('ocrConfig', { mode, ocrSpaceKeys });
+      toast('拍照识图 OCR 设置已保存');
     });
 
     $('#clearAllBtn')?.addEventListener('click', async () => {
@@ -4403,29 +4506,103 @@
     });
   }
 
-  /* =============================== 豆包 AI =============================== */
+  /* =============================== 多厂商 / 多 Key 大模型引擎池 =============================== */
+  const AI_PROVIDER_PRESETS = {
+    zhipu: {
+      name: '智谱免费',
+      model: 'glm-4-flash',
+      visionModel: 'glm-4v-flash',
+      url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    },
+    siliconflow: {
+      name: '硅基流动开源',
+      model: 'Qwen/Qwen2.5-7B-Instruct',
+      visionModel: 'Qwen/Qwen2.5-VL-7B-Instruct',
+      url: 'https://api.siliconflow.cn/v1/chat/completions',
+    },
+    doubao: {
+      name: '豆包火山方舟',
+      model: 'doubao-1-5-pro-32k-250115',
+      visionModel: 'doubao-1-5-vision-pro-32k-250115',
+      url: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+    },
+    deepseek: {
+      name: 'DeepSeek',
+      model: 'deepseek-chat',
+      visionModel: '',
+      url: 'https://api.deepseek.com/v1/chat/completions',
+    },
+    openrouter: {
+      name: 'OpenRouter免费',
+      model: 'qwen/qwen-2.5-7b-instruct:free',
+      visionModel: '',
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+    },
+  };
+
+  function parseKeysList(raw) {
+    return String(raw || '')
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  function getAiPool() {
+    const saved = getMeta('aiPool', null);
+    if (Array.isArray(saved) && saved.length) {
+      return saved.filter((p) => p && Array.isArray(p.keys) && p.keys.length);
+    }
+    const legacy = getMeta('ai', null);
+    if (legacy && legacy.key) {
+      return [{
+        id: 'legacy',
+        name: legacy.name || '已配置模型',
+        model: legacy.model || 'doubao-1-5-pro-32k-250115',
+        visionModel: legacy.visionModel || '',
+        url: legacy.url || 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+        keys: parseKeysList(legacy.key),
+      }];
+    }
+    return [];
+  }
+
   async function callDoubao(messages, opts = {}) {
-    const ai = opts.ai || getMeta('ai', null);
-    if (!ai || !ai.key) throw new Error('未配置豆包 Key');
-    const url = ai.url || 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
-    const body = JSON.stringify({
-      model: ai.model || 'doubao-1-5-pro-32k-250115',
-      messages,
-      temperature: opts.temperature == null ? 0.6 : opts.temperature,
-      max_tokens: opts.maxTokens || 1500,
-    });
-    const data = await requestJson(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${ai.key}`,
-      },
-      body,
-      timeout: 45000,
-    });
-    const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-    if (!content) throw new Error('AI 未返回内容');
-    return content;
+    const pool = getAiPool();
+    if (!pool.length) throw new Error('请先在「设置」添加免费大模型 Key');
+    const needVision = Boolean(opts.vision);
+    const candidates = needVision ? pool.filter((p) => p.visionModel) : pool;
+    if (!candidates.length) throw new Error('引擎池里尚未配置视觉识图模型（如智谱 glm-4v-flash）');
+
+    let lastErr = null;
+    for (const provider of candidates) {
+      const model = needVision ? provider.visionModel : provider.model;
+      const url = provider.url;
+      for (const apiKey of provider.keys) {
+        try {
+          const body = JSON.stringify({
+            model,
+            messages,
+            temperature: opts.temperature == null ? 0.6 : opts.temperature,
+            max_tokens: opts.maxTokens || 1500,
+          });
+          const data = await requestJson(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body,
+            timeout: 45000,
+          });
+          const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+          if (content) return content;
+          lastErr = new Error(`${provider.name} 未返回内容`);
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+    }
+    throw lastErr || new Error('所有可用模型 Key 均调用失败');
   }
 
   function libraryDigest() {
@@ -4436,9 +4613,8 @@
   }
 
   async function aiRecommendBooks() {
-    const ai = getMeta('ai', null);
-    if (!ai || !ai.key) {
-      toast('请先在「设置」配置豆包 API Key');
+    if (!getAiPool().length) {
+      toast('请先在「设置」添加免费大模型 Key（如智谱 glm-4-flash）');
       switchTab('settings');
       setTimeout(() => $('#doubaoKeyInput')?.focus(), 400);
       return;
@@ -4457,7 +4633,7 @@ ${libraryDigest() || '（还没有阅读记录）'}
       const content = await callDoubao([
         { role: 'system', content: '你是资深中文图书编辑，推荐准确、克制、不虚构书名。' },
         { role: 'user', content: prompt },
-      ], { ai, maxTokens: 1200, temperature: 0.7 });
+      ], { maxTokens: 1200, temperature: 0.7 });
       const arr = extractJsonArray(content);
       if (!arr || !arr.length) throw new Error('解析荐书结果失败');
       state.recommendations = arr.slice(0, 4).map((b) => ({
@@ -4471,7 +4647,7 @@ ${libraryDigest() || '（还没有阅读记录）'}
         spineColor: pickColorFor(b.title || ''),
       }));
       renderAiRecommendations();
-      toast('豆包已为你挑好 4 本书');
+      toast('AI 已为你挑好 4 本书');
     } catch (err) {
       toast(`AI 荐书失败：${err.message || '请检查网络或 Key'}`);
     } finally {
@@ -4508,9 +4684,8 @@ ${libraryDigest() || '（还没有阅读记录）'}
   }
 
   async function aiGenerateInsight() {
-    const ai = getMeta('ai', null);
-    if (!ai || !ai.key) {
-      toast('请先在「设置」配置豆包 API Key');
+    if (!getAiPool().length) {
+      toast('请先在「设置」添加免费大模型 Key（如智谱 glm-4-flash）');
       switchTab('settings');
       setTimeout(() => $('#doubaoKeyInput')?.focus(), 400);
       return;
@@ -4531,7 +4706,7 @@ ${libraryDigest() || '（暂无）'}
       const text = await callDoubao([
         { role: 'system', content: '你是温柔且专业的阅读教练，善于从数据中读出人的状态。' },
         { role: 'user', content: prompt },
-      ], { ai, maxTokens: 700, temperature: 0.75 });
+      ], { maxTokens: 700, temperature: 0.75 });
       if (box) box.textContent = String(text).trim();
       toast('AI 阅读画像已生成');
     } catch (err) {

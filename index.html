@@ -166,7 +166,7 @@
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
             <button type="button" class="text-link-btn" id="refreshRecBtn">换一批</button>
-            <button type="button" class="ai-pill-btn" id="aiRecommendBtn">✨ 豆包荐书</button>
+            <button type="button" class="ai-pill-btn" id="aiRecommendBtn">✨ AI 荐书</button>
           </div>
         </div>
 
@@ -338,7 +338,7 @@
           </div>
         </div>
 
-        <!-- Optional Doubao AI Config -->
+        <!-- Multi-Provider AI & Free OCR Key Pool Config -->
         <div class="settings-card">
           <div class="settings-card-head">
             <div class="settings-icon indigo">
@@ -347,26 +347,76 @@
               </svg>
             </div>
             <div>
-              <h3>豆包 AI 书友助手（可选）</h3>
-              <p>配置火山方舟免费额度 Key，启用深度阅读画像与私人荐书</p>
+              <h3>免费 / 开源大模型多 Key 池（可选）</h3>
+              <p>支持智谱免费模型、硅基流动、豆包、DeepSeek、OpenRouter，多 Key 限流自动切换</p>
+            </div>
+          </div>
+
+          <div class="hot-tags" id="aiPresetTags" style="margin-bottom:10px">
+            <button type="button" class="hot-tag" data-ai-preset="zhipu">智谱免费(推荐)</button>
+            <button type="button" class="hot-tag" data-ai-preset="siliconflow">硅基流动开源</button>
+            <button type="button" class="hot-tag" data-ai-preset="doubao">豆包火山方舟</button>
+            <button type="button" class="hot-tag" data-ai-preset="deepseek">DeepSeek</button>
+            <button type="button" class="hot-tag" data-ai-preset="openrouter">OpenRouter免费</button>
+          </div>
+
+          <div class="form-row-2" style="margin-bottom:8px">
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="aiProviderNameInput"><span>厂商名称</span></label>
+              <input id="aiProviderNameInput" class="form-control" type="text" placeholder="如：智谱免费">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="doubaoModelInput"><span>文本模型</span></label>
+              <input id="doubaoModelInput" class="form-control" type="text" placeholder="glm-4-flash">
+            </div>
+          </div>
+          <div class="form-row-2" style="margin-bottom:8px">
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="aiVisionModelInput"><span>视觉识图模型（选填）</span></label>
+              <input id="aiVisionModelInput" class="form-control" type="text" placeholder="如：glm-4v-flash">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="doubaoUrlInput"><span>接口地址</span></label>
+              <input id="doubaoUrlInput" class="form-control" type="url" placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions">
             </div>
           </div>
           <div class="form-group" style="margin-bottom:10px">
-            <label class="form-label" for="doubaoKeyInput"><span>API Key</span></label>
-            <input id="doubaoKeyInput" class="form-control" type="password" placeholder="粘贴火山方舟 API Key（仅存于本机）">
+            <label class="form-label" for="doubaoKeyInput"><span>API Key（支持一行填一个，多 Key 自动轮询防限流）</span></label>
+            <textarea id="doubaoKeyInput" class="form-control" rows="2" placeholder="粘贴 1 个或多个 API Key（每行一个，仅存于本机）"></textarea>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <button type="button" class="btn btn-primary btn-sm" id="saveDoubaoCfgBtn" style="flex:1">保存到引擎池</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="clearDoubaoCfgBtn">清空全部</button>
+          </div>
+          <div id="aiPoolList" class="ai-pool-list"></div>
+        </div>
+
+        <!-- Free OCR Engine & Key Pool Config -->
+        <div class="settings-card">
+          <div class="settings-card-head">
+            <div class="settings-icon accent">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/>
+              </svg>
+            </div>
+            <div>
+              <h3>拍照识图（OCR）多引擎设置</h3>
+              <p>默认 iOS 离线免费 Vision，失败自动降级视觉大模型与 OCR.space 免费 API</p>
+            </div>
           </div>
           <div class="form-group" style="margin-bottom:10px">
-            <label class="form-label" for="doubaoModelInput"><span>模型 / Endpoint ID</span></label>
-            <input id="doubaoModelInput" class="form-control" type="text" placeholder="doubao-1-5-pro-32k-250115 或 ep-xxxx">
+            <label class="form-label" for="ocrModeSelect"><span>识别引擎优先级</span></label>
+            <select id="ocrModeSelect" class="form-control">
+              <option value="auto">智能自动（Apple 离线 Vision → 视觉大模型 → OCR.space）</option>
+              <option value="vision_ai">优先免费视觉大模型（如智谱 glm-4v-flash，自动去噪排版）</option>
+              <option value="ocrspace">优先 OCR.space 免费 API（每月 25,000 次免费）</option>
+            </select>
           </div>
-          <div class="form-group" style="margin-bottom:12px">
-            <label class="form-label" for="doubaoUrlInput"><span>接口地址</span></label>
-            <input id="doubaoUrlInput" class="form-control" type="url" placeholder="https://ark.cn-beijing.volces.com/api/v3/chat/completions">
+          <div class="form-group" style="margin-bottom:10px">
+            <label class="form-label" for="ocrSpaceKeysInput"><span>OCR.space 免费 API Key（选填，一行一个；留空内置公开测试 Key）</span></label>
+            <textarea id="ocrSpaceKeysInput" class="form-control" rows="2" placeholder="去 ocr.space/ocrapi 免费申请，可填多个 Key 轮询（留空默认用 helloworld）"></textarea>
           </div>
-          <div style="display:flex;gap:8px">
-            <button type="button" class="btn btn-primary btn-sm" id="saveDoubaoCfgBtn" style="flex:1">保存配置</button>
-            <button type="button" class="btn btn-secondary btn-sm" id="clearDoubaoCfgBtn">清除</button>
-          </div>
+          <button type="button" class="btn btn-soft btn-sm btn-block" id="saveOcrCfgBtn">保存 OCR 设置</button>
         </div>
 
         <!-- Safari Add to Home Screen Guide (auto hidden inside native iOS App) -->
