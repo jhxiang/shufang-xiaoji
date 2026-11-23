@@ -402,27 +402,54 @@
     onDocumentLayoutScanned(firstPageBase64, layoutJson, pageCount) {
       let pages = [];
       try { pages = JSON.parse(String(layoutJson || '[]')); } catch { pages = []; }
-      const rawDataUrl = firstPageBase64
+      const primaryDataUrl = firstPageBase64
         ? (String(firstPageBase64).startsWith('data:') ? String(firstPageBase64) : `data:image/jpeg;base64,${firstPageBase64}`)
         : '';
       if (state.noteType !== 'scan') {
         state.noteType = 'scan';
         $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'scan'));
       }
-      if (Array.isArray(pages) && pages.length) {
-        const rendered = renderCleanLayoutCanvas(pages);
-        if (rendered && rendered.dataUrl) {
-          state.noteLayout = rendered.layout;
-          setNoteImage(rendered.dataUrl);
-          setOcrStatus(`已生成净版扫描页（${pageCount || pages.length} 页 · ${rendered.layout.blocks.length} 行版面框 · 点击放大）`);
-          toast('净版扫描页已生成，点击图片可全屏查看与复制');
+
+      // 单页：直接使用 WPS 级去阴影增白后的高清电子文档原图 + 1:1 对齐的透明可复制版面框
+      if (Array.isArray(pages) && pages.length === 1) {
+        const p = pages[0];
+        const pageImg = p.imageBase64
+          ? (String(p.imageBase64).startsWith('data:') ? String(p.imageBase64) : `data:image/jpeg;base64,${p.imageBase64}`)
+          : primaryDataUrl;
+        if (pageImg) {
+          const blocks = Array.isArray(p.blocks) ? p.blocks : [];
+          state.noteLayout = {
+            width: p.width || 0,
+            height: p.height || 0,
+            aspectRatio: p.aspectRatio || 0.72,
+            blocks,
+          };
+          setNoteImage(pageImg);
+          setOcrStatus(`已转为电子文档（${blocks.length} 处可点选文字 · 点击放大）`);
+          toast('已生成电子文档扫描件，点击可放大与复制文字');
           return;
         }
       }
-      if (rawDataUrl) {
-        setNoteImage(rawDataUrl);
-        setOcrStatus('正在云端识别版面文字…');
-        runOcr(rawDataUrl, { skipApple: true });
+
+      // 多页：将多张 WPS 级电子文档图按原图比例纵向合成高清电子文档长卷，并 1:1 映射所有版面框
+      if (Array.isArray(pages) && pages.length > 1) {
+        stitchElectronicPages(pages).then((stitched) => {
+          if (stitched && stitched.dataUrl) {
+            state.noteLayout = stitched.layout;
+            setNoteImage(stitched.dataUrl);
+            setOcrStatus(`已转为电子文档（共 ${pages.length} 页 · ${stitched.layout.blocks.length} 处可点选文字 · 点击放大）`);
+            toast(`已合成 ${pages.length} 页电子文档，点击可放大查看`);
+          } else if (primaryDataUrl) {
+            setNoteImage(primaryDataUrl);
+            setOcrStatus('已生成电子文档（点击放大）');
+          }
+        });
+        return;
+      }
+
+      if (primaryDataUrl) {
+        setNoteImage(primaryDataUrl);
+        setOcrStatus('已转为电子文档（点击放大）');
       }
     },
   };
@@ -2916,6 +2943,84 @@
       };
       img.onerror = () => resolve(dataUrl);
       img.src = dataUrl;
+    });
+  }
+
+  /** 多页 WPS 级电子文档图按真实原图比例纵向合成为单张高清电子文档，并 1:1 映射透明 OCR 版面框 */
+  function stitchElectronicPages(pages) {
+    return new Promise((resolve) => {
+      const imgs = [];
+      let loaded = 0;
+      const total = pages.length;
+      if (!total) { resolve(null); return; }
+
+      pages.forEach((p, idx) => {
+        const img = new Image();
+        img.onload = () => {
+          imgs[idx] = img;
+          loaded++;
+          if (loaded === total) finalize();
+        };
+        img.onerror = () => {
+          imgs[idx] = null;
+          loaded++;
+          if (loaded === total) finalize();
+        };
+        const b64 = p.imageBase64 || '';
+        img.src = b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
+      });
+
+      function finalize() {
+        const valid = pages.map((p, i) => ({ page: p, img: imgs[i] })).filter((x) => x.img && x.img.naturalWidth > 0);
+        if (!valid.length) { resolve(null); return; }
+
+        const W = 1200;
+        const gap = 20;
+        const heights = valid.map((x) => Math.round(W * (x.img.naturalHeight / x.img.naturalWidth)));
+        const rawTotalH = heights.reduce((s, h) => s + h, 0) + gap * (valid.length - 1);
+        const maxH = 6400;
+        const scale = rawTotalH > maxH ? (maxH / rawTotalH) : 1;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(W * scale);
+        canvas.height = Math.round(rawTotalH * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#EFECE6';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const combinedBlocks = [];
+        let yCursor = 0;
+        valid.forEach((item, idx) => {
+          const ph = heights[idx] * scale;
+          const py = yCursor * scale;
+          ctx.drawImage(item.img, 0, py, canvas.width, ph);
+
+          (item.page.blocks || []).forEach((b) => {
+            const nx = clamp(Number(b.x) || 0, 0, 0.995);
+            const ny = clamp(Number(b.y) || 0, 0, 0.995);
+            const nw = clamp(Number(b.w) || 0.1, 0.005, 1 - nx);
+            const nh = clamp(Number(b.h) || 0.02, 0.004, 1 - ny);
+            combinedBlocks.push({
+              text: b.text || '',
+              x: +nx.toFixed(4),
+              y: +((py + ny * ph) / canvas.height).toFixed(4),
+              w: +nw.toFixed(4),
+              h: +((nh * ph) / canvas.height).toFixed(4),
+            });
+          });
+          yCursor += heights[idx] + gap;
+        });
+
+        resolve({
+          dataUrl: canvas.toDataURL('image/jpeg', 0.86),
+          layout: {
+            width: canvas.width,
+            height: canvas.height,
+            aspectRatio: +(canvas.width / canvas.height).toFixed(4),
+            blocks: combinedBlocks,
+          },
+        });
+      }
     });
   }
 

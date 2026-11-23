@@ -337,12 +337,24 @@ extension WebAppViewController: WKScriptMessageHandler {
             return
         }
         let languages = (body["languages"] as? [String]) ?? ["zh-Hans", "en-US"]
-        VisionOCR.recognizeLayout(imageBase64: base64, languages: languages) { [weak self] res in
+        VisionOCR.recognizeLayout(imageBase64: base64, languages: languages, enhance: true) { [weak self] res in
             guard let self = self else { return }
-            if let res = res, !res.blocks.isEmpty,
-               let jsonData = try? JSONSerialization.data(withJSONObject: [["width": res.width, "height": res.height, "aspectRatio": res.aspectRatio, "blocks": res.blocks]], options: []),
-               let layoutJson = String(data: jsonData, encoding: .utf8) {
-                let js = "ShufangNative && ShufangNative.onDocumentLayoutScanned && ShufangNative.onDocumentLayoutScanned(\(self.jsLiteral(base64)), \(self.jsLiteral(layoutJson)), 1)"
+            if let res = res {
+                let docB64 = res.enhancedBase64 ?? base64
+                let pageObj: [String: Any] = [
+                    "width": res.width,
+                    "height": res.height,
+                    "aspectRatio": res.aspectRatio,
+                    "blocks": res.blocks,
+                ]
+                let layoutJson: String
+                if let jsonData = try? JSONSerialization.data(withJSONObject: [pageObj], options: []),
+                   let s = String(data: jsonData, encoding: .utf8) {
+                    layoutJson = s
+                } else {
+                    layoutJson = "[]"
+                }
+                let js = "ShufangNative && ShufangNative.onDocumentLayoutScanned && ShufangNative.onDocumentLayoutScanned(\(self.jsLiteral(docB64)), \(self.jsLiteral(layoutJson)), 1)"
                 self.runJS(js)
             } else {
                 self.runJS("ShufangNative && ShufangNative.onOcrResult('', false)")
@@ -548,21 +560,24 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
         }
         guard let firstBase64 = pagesBase64.first else { return }
 
-        // 逐页使用 Apple Vision 离线识别精确版面框 (x, y, w, h + text)，用于渲染无背景噪声的净版原图
+        // 逐页做 WPS 扫描级「去阴影增白电子文档化」+ Vision 离线精确版面框 (x, y, w, h + text)
         let group = DispatchGroup()
         var pageLayouts: [[String: Any]?] = Array(repeating: nil, count: pagesBase64.count)
+        var enhancedPages: [String?] = Array(repeating: nil, count: pagesBase64.count)
         let lock = NSLock()
 
         for (idx, b64) in pagesBase64.enumerated() {
             group.enter()
-            VisionOCR.recognizeLayout(imageBase64: b64, languages: ["zh-Hans", "en-US"]) { res in
-                if let res = res, !res.blocks.isEmpty {
+            VisionOCR.recognizeLayout(imageBase64: b64, languages: ["zh-Hans", "en-US"], enhance: true) { res in
+                if let res = res {
                     lock.lock()
+                    enhancedPages[idx] = res.enhancedBase64 ?? b64
                     pageLayouts[idx] = [
                         "width": res.width,
                         "height": res.height,
                         "aspectRatio": res.aspectRatio,
                         "blocks": res.blocks,
+                        "imageBase64": res.enhancedBase64 ?? b64,
                     ]
                     lock.unlock()
                 }
@@ -573,6 +588,7 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
             let validPages = pageLayouts.compactMap { $0 }
+            let primaryB64 = enhancedPages.compactMap { $0 }.first ?? firstBase64
             let layoutJson: String
             if let data = try? JSONSerialization.data(withJSONObject: validPages, options: []),
                let str = String(data: data, encoding: .utf8) {
@@ -580,7 +596,7 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
             } else {
                 layoutJson = "[]"
             }
-            let js = "ShufangNative && ShufangNative.onDocumentLayoutScanned && ShufangNative.onDocumentLayoutScanned(\(self.jsLiteral(firstBase64)), \(self.jsLiteral(layoutJson)), \(pageCount))"
+            let js = "ShufangNative && ShufangNative.onDocumentLayoutScanned && ShufangNative.onDocumentLayoutScanned(\(self.jsLiteral(primaryB64)), \(self.jsLiteral(layoutJson)), \(pageCount))"
             self.runJS(js)
         }
     }

@@ -1,13 +1,15 @@
 //
 //  VisionOCR.swift
-//  Apple Vision 框架文字识别与版面框定位：
-//  既支持纯文本提取，也支持返回每一行文字的精确归一化版面坐标 (x, y, w, h)，
-//  用于生成去除纸张背景噪声、按原书版面框精准重排的「净版电子书页图」。
+//  Apple Vision 框架文字识别与版面框定位 + CoreImage「WPS 扫描级」纸质变电子文档增强引擎：
+//  1. 先对扫描书页做 GPU 加速的「自适应光照去阴影 + 纸张漂白 + 文字锐化」（保留真实印刷字、插图与批注，去除黄底/暗角/阴影噪点）；
+//  2. 再在电子文档图上跑 Vision OCR 提取 1:1 精确归一化版面坐标 (x, y, w, h)，
+//     形成类似 WPS 双层电子文档的体验：视觉上是超清电子文档原图，点击放大后可直接点选/复制版面文字。
 //
 
 import Foundation
 import Vision
 import UIKit
+import CoreImage
 
 enum VisionOCR {
 
@@ -16,29 +18,82 @@ enum VisionOCR {
         let width: Int
         let height: Int
         let aspectRatio: Double
+        let enhancedBase64: String?
         let blocks: [[String: Any]]
     }
 
-    /// 识别图片中的文字及其精确版面坐标（左上角原点归一化 0..1，严格对齐原图真实宽高）
-    static func recognizeLayout(imageBase64: String, languages: [String], completion: @escaping (LayoutResult?) -> Void) {
+    private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// WPS 扫描级「纸质变电子文档」增强：
+    /// 局部光照归一化（原图 ÷ 大半径模糊背景）彻底消除阴影、暗角与发黄纸底，
+    /// 保留真实印刷文字、插图与彩色批注，再做纸白提亮与文字锐化。
+    static func enhanceToElectronicDocument(_ rawImage: UIImage) -> UIImage {
+        let image = normalizedUpImage(rawImage)
+        guard let cgImage = image.cgImage else { return image }
+
+        let input = CIImage(cgImage: cgImage)
+        let extent = input.extent
+        let blurRadius = max(24.0, min(90.0, Double(min(extent.width, extent.height)) * 0.035))
+
+        // 1. 估计局部纸张光照与阴影背景
+        let clamped = input.clampedToExtent()
+        guard let blurFilter = CIFilter(name: "CIGaussianBlur") else { return image }
+        blurFilter.setValue(clamped, forKey: kCIInputImageKey)
+        blurFilter.setValue(blurRadius, forKey: kCIInputRadiusKey)
+        guard let blurred = blurFilter.outputImage?.cropped(to: extent) else { return image }
+
+        // 2. 光照除法归一化（CIDivideBlendMode: inputImage / backgroundImage）
+        // 阴影区域与泛黄纸底自动趋近纯白 1.0，深色文字与彩色划线清晰保留
+        guard let divideFilter = CIFilter(name: "CIDivideBlendMode") else { return image }
+        divideFilter.setValue(input, forKey: kCIInputImageKey)
+        divideFilter.setValue(blurred, forKey: kCIInputBackgroundImageKey)
+        guard let normalized = divideFilter.outputImage?.cropped(to: extent) else { return image }
+
+        // 3. 对比度与白点增强（让纸底彻底干净如电子文档，文字黑度扎实）
+        var current = normalized
+        if let colorFilter = CIFilter(name: "CIColorControls") {
+            colorFilter.setValue(current, forKey: kCIInputImageKey)
+            colorFilter.setValue(1.38, forKey: kCIInputContrastKey)
+            colorFilter.setValue(0.06, forKey: kCIInputBrightnessKey)
+            colorFilter.setValue(1.08, forKey: kCIInputSaturationKey)
+            if let out = colorFilter.outputImage?.cropped(to: extent) {
+                current = out
+            }
+        }
+
+        // 4. 轻度亮度锐化，让印刷字边缘更清晰
+        if let sharpen = CIFilter(name: "CISharpenLuminance") {
+            sharpen.setValue(current, forKey: kCIInputImageKey)
+            sharpen.setValue(0.45, forKey: kCIInputSharpnessKey)
+            if let out = sharpen.outputImage?.cropped(to: extent) {
+                current = out
+            }
+        }
+
+        guard let outCG = ciContext.createCGImage(current, from: extent) else { return image }
+        return UIImage(cgImage: outCG, scale: image.scale, orientation: .up)
+    }
+
+    /// 先增强为电子文档原图，再识别图片中的文字及其 1:1 精确版面坐标（左上角原点归一化 0..1）
+    static func recognizeLayout(imageBase64: String, languages: [String], enhance: Bool = true, completion: @escaping (LayoutResult?) -> Void) {
         guard let data = Data(base64Encoded: imageBase64, options: .ignoreUnknownCharacters),
               let rawImage = UIImage(data: data) else {
             completion(nil)
             return
         }
 
-        // 先规范化为 .up 方向，确保原图尺寸、像素和 Vision 坐标三者 100% 严格一致
-        let image = normalizedUpImage(rawImage)
-        guard let cgImage = image.cgImage else {
-            completion(nil)
-            return
-        }
-
-        let imgW = cgImage.width
-        let imgH = cgImage.height
-        let aspectRatio = (imgW > 0 && imgH > 0) ? (Double(imgW) / Double(imgH)) : 0.72
-
         DispatchQueue.global(qos: .userInitiated).async {
+            let processed = enhance ? enhanceToElectronicDocument(rawImage) : normalizedUpImage(rawImage)
+            guard let cgImage = processed.cgImage else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+
+            let imgW = cgImage.width
+            let imgH = cgImage.height
+            let aspectRatio = (imgW > 0 && imgH > 0) ? (Double(imgW) / Double(imgH)) : 0.72
+            let enhancedB64 = processed.jpegData(compressionQuality: 0.84)?.base64EncodedString()
+
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
@@ -71,7 +126,6 @@ enum VisionOCR {
                     if str.isEmpty { continue }
 
                     let box = obs.boundingBox
-                    // Vision 坐标左下角为原点，转换为左上角为原点的归一化坐标
                     let nx = max(0.0, min(1.0, Double(box.origin.x)))
                     let ny = max(0.0, min(1.0, Double(1.0 - box.origin.y - box.size.height)))
                     let nw = max(0.01, min(1.0 - nx, Double(box.size.width)))
@@ -94,13 +148,40 @@ enum VisionOCR {
                 }
 
                 let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                let res = LayoutResult(text: text, width: imgW, height: imgH, aspectRatio: aspectRatio, blocks: blocks)
+                let res = LayoutResult(
+                    text: text,
+                    width: imgW,
+                    height: imgH,
+                    aspectRatio: aspectRatio,
+                    enhancedBase64: enhancedB64,
+                    blocks: blocks
+                )
                 DispatchQueue.main.async {
-                    completion(blocks.isEmpty ? nil : res)
+                    completion(res)
                 }
             } catch {
-                DispatchQueue.main.async { completion(nil) }
+                // 即使 OCR 失败，也返回去阴影增白后的电子文档图
+                let res = LayoutResult(
+                    text: "",
+                    width: imgW,
+                    height: imgH,
+                    aspectRatio: aspectRatio,
+                    enhancedBase64: enhancedB64,
+                    blocks: []
+                )
+                DispatchQueue.main.async { completion(res) }
             }
+        }
+    }
+
+    /// 兼容旧接口：只返回拼接文本
+    static func recognize(imageBase64: String, languages: [String], completion: @escaping (String?) -> Void) {
+        recognizeLayout(imageBase64: imageBase64, languages: languages, enhance: false) { res in
+            guard let res = res, !res.text.isEmpty else {
+                completion(nil)
+                return
+            }
+            completion(res.text)
         }
     }
 
@@ -112,31 +193,6 @@ enum VisionOCR {
         let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: image.size))
-        }
-    }
-
-    /// 兼容旧接口：只返回拼接文本
-    static func recognize(imageBase64: String, languages: [String], completion: @escaping (String?) -> Void) {
-        recognizeLayout(imageBase64: imageBase64, languages: languages) { res in
-            guard let res = res, !res.text.isEmpty else {
-                completion(nil)
-                return
-            }
-            completion(res.text)
-        }
-    }
-
-    private static func cgImageOrientation(from uiOrientation: UIImage.Orientation) -> CGImagePropertyOrientation {
-        switch uiOrientation {
-        case .up: return .up
-        case .down: return .down
-        case .left: return .left
-        case .right: return .right
-        case .upMirrored: return .upMirrored
-        case .downMirrored: return .downMirrored
-        case .leftMirrored: return .leftMirrored
-        case .rightMirrored: return .rightMirrored
-        @unknown default: return .up
         }
     }
 }
