@@ -399,26 +399,30 @@
       setNoteImage(dataUrl);
       runOcr(dataUrl);
     },
-    onDocumentScanned(firstPageBase64, text, pageCount) {
-      if (firstPageBase64) {
-        const dataUrl = String(firstPageBase64).startsWith('data:')
-          ? String(firstPageBase64)
-          : `data:image/jpeg;base64,${firstPageBase64}`;
-        setNoteImage(dataUrl);
-        if (state.noteType !== 'scan') {
-          state.noteType = 'scan';
-          $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'scan'));
+    onDocumentLayoutScanned(firstPageBase64, layoutJson, pageCount) {
+      let pages = [];
+      try { pages = JSON.parse(String(layoutJson || '[]')); } catch { pages = []; }
+      const rawDataUrl = firstPageBase64
+        ? (String(firstPageBase64).startsWith('data:') ? String(firstPageBase64) : `data:image/jpeg;base64,${firstPageBase64}`)
+        : '';
+      if (state.noteType !== 'scan') {
+        state.noteType = 'scan';
+        $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'scan'));
+      }
+      if (Array.isArray(pages) && pages.length) {
+        const rendered = renderCleanLayoutCanvas(pages);
+        if (rendered && rendered.dataUrl) {
+          state.noteLayout = rendered.layout;
+          setNoteImage(rendered.dataUrl);
+          setOcrStatus(`已生成净版扫描页（${pageCount || pages.length} 页 · ${rendered.layout.blocks.length} 行版面框 · 点击放大）`);
+          toast('净版扫描页已生成，点击图片可全屏查看与复制');
+          return;
         }
-        const cleaned = String(text || '').trim();
-        if (cleaned) {
-          appendToNoteText(cleaned);
-          setOcrStatus(`扫描全能王识别完成（${pageCount || 1} 页 · ${cleaned.length} 字）`);
-          toast(`已扫描 ${pageCount || 1} 页并提取 ${cleaned.length} 字`);
-        } else {
-          // 离线 Vision 未提取到文字时自动降级云端视觉大模型 / OCR.space
-          setOcrStatus('正在云端加强识别扫描页…');
-          runOcr(dataUrl, { skipApple: true });
-        }
+      }
+      if (rawDataUrl) {
+        setNoteImage(rawDataUrl);
+        setOcrStatus('正在云端识别版面文字…');
+        runOcr(rawDataUrl, { skipApple: true });
       }
     },
   };
@@ -475,6 +479,8 @@
     noteBookId: null,
     noteType: 'reflection',
     noteImage: null,
+    noteLayout: null,
+    lightboxLayout: null,
     charBookId: null,
     editingCharId: null,
     charColor: (window.SPINE_COLORS || ['#2F6354'])[0],
@@ -2313,6 +2319,12 @@
 
     body.querySelector('[data-nact="add"]')?.addEventListener('click', () => openNoteEditor(book.id));
     body.querySelector('#noteListWrap')?.addEventListener('click', async (e) => {
+      const zoom = e.target.closest('[data-zoom-note]');
+      if (zoom) {
+        const note = book.notes.find((n) => n.id === zoom.dataset.zoomNote);
+        if (note && note.image) openScanLightbox(note.image, note.layout || null);
+        return;
+      }
       const del = e.target.closest('[data-del-note]');
       if (del) {
         const note = book.notes.find((n) => n.id === del.dataset.delNote);
@@ -2340,7 +2352,7 @@
         <span>${fmtDateTime(n.createdAt)}${n.page ? ` · ${esc(n.page)}` : ''}</span>
       </div>
       <div class="note-card-body">${esc(n.content || '')}</div>
-      ${n.image ? `<img class="note-card-img" src="${esc(n.image)}" alt="读书笔记扫描图" loading="lazy">` : ''}
+      ${n.image ? `<img class="note-card-img" src="${esc(n.image)}" data-zoom-note="${esc(n.id)}" alt="净版扫描页" loading="lazy">` : ''}
       <div class="note-card-actions">
         <button type="button" class="text-link-btn" data-note-poster="${esc(n.id)}">生成卡片</button>
         <button type="button" class="text-link-btn danger" data-del-note="${esc(n.id)}">删除</button>
@@ -2802,6 +2814,7 @@
     state.noteBookId = bookId;
     state.noteType = 'reflection';
     state.noteImage = null;
+    state.noteLayout = null;
     $$('#noteTypeRow .hot-tag').forEach((t) => t.classList.toggle('active', t.dataset.noteType === 'reflection'));
     $('#noteContentInput').value = '';
     $('#notePageInput').value = '';
@@ -2906,6 +2919,160 @@
     });
   }
 
+  /** 将精确版面框 (x, y, w, h + text) 渲染为去除所有背景噪声的净版电子书页图 */
+  function renderCleanLayoutCanvas(pagesLayout) {
+    const pages = (Array.isArray(pagesLayout) ? pagesLayout : []).filter((p) => p && Array.isArray(p.blocks) && p.blocks.length);
+    if (!pages.length) return null;
+
+    const W = 1200;
+    const gap = 28;
+    const pageHeights = pages.map((p) => {
+      const ar = clamp(Number(p.aspectRatio) || 0.72, 0.42, 1.8);
+      return Math.round(W / ar);
+    });
+    const totalH = pageHeights.reduce((s, h) => s + h, 0) + gap * (pages.length - 1);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = Math.min(totalH, 6400);
+    const scaleAll = canvas.height / totalH;
+    const ctx = canvas.getContext('2d');
+
+    // 纯净纸底，彻底去除原照片阴影、手指、折痕与杂色噪声
+    ctx.fillStyle = '#F2ECE0';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const combinedBlocks = [];
+    let offsetY = 0;
+
+    pages.forEach((page, pIdx) => {
+      const ph = pageHeights[pIdx] * scaleAll;
+      const py = offsetY * scaleAll;
+
+      // 单页温润纸白画布 + 细腻纸边
+      ctx.fillStyle = '#FAF7F0';
+      ctx.fillRect(0, py, canvas.width, ph);
+      ctx.strokeStyle = 'rgba(130, 114, 92, 0.16)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(1, py + 1, canvas.width - 2, ph - 2);
+
+      // 按原图版面框坐标精确绘制每一行文字
+      ctx.fillStyle = '#23201C';
+      ctx.textBaseline = 'middle';
+
+      page.blocks.forEach((b) => {
+        const text = String(b.text || '').trim();
+        if (!text) return;
+        const bx = clamp(Number(b.x) || 0, 0, 0.98) * canvas.width;
+        const by = py + clamp(Number(b.y) || 0, 0, 0.98) * ph;
+        const bw = Math.max(24, clamp(Number(b.w) || 0.2, 0.02, 1) * canvas.width);
+        const bh = Math.max(14, clamp(Number(b.h) || 0.025, 0.01, 0.25) * ph);
+
+        let fontSize = clamp(Math.round(bh * 0.84), 14, 64);
+        const fontFamily = '"Songti SC", "Noto Serif SC", "PingFang SC", Georgia, serif';
+        ctx.font = `500 ${fontSize}px ${fontFamily}`;
+        const measured = ctx.measureText(text).width;
+
+        ctx.save();
+        if (measured > bw * 1.04 && measured > 0) {
+          const sx = bw / measured;
+          ctx.translate(bx, by + bh / 2);
+          ctx.scale(sx, 1);
+          ctx.fillText(text, 0, 0);
+        } else {
+          ctx.fillText(text, bx, by + bh / 2);
+        }
+        ctx.restore();
+
+        combinedBlocks.push({
+          text,
+          x: +(bx / canvas.width).toFixed(4),
+          y: +(by / canvas.height).toFixed(4),
+          w: +(bw / canvas.width).toFixed(4),
+          h: +(bh / canvas.height).toFixed(4),
+        });
+      });
+
+      offsetY += pageHeights[pIdx] + gap;
+    });
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+    return {
+      dataUrl,
+      layout: {
+        aspectRatio: +(canvas.width / canvas.height).toFixed(4),
+        blocks: combinedBlocks,
+      },
+    };
+  }
+
+  /** 云端纯文本 OCR 降级时，也自动排版生成同样的净版去噪书页图与可点击版面框 */
+  function renderCleanPageFromPlainText(rawText) {
+    const text = String(rawText || '').trim();
+    if (!text) return null;
+    const W = 1200;
+    const padX = 88;
+    const padY = 96;
+    const fontSize = 32;
+    const lineH = 54;
+    const maxW = W - padX * 2;
+
+    const tmp = document.createElement('canvas').getContext('2d');
+    tmp.font = `500 ${fontSize}px "Songti SC", "Noto Serif SC", "PingFang SC", serif`;
+    const wrapped = [];
+    text.split(/\r?\n/).forEach((para) => {
+      if (!para.trim()) { wrapped.push(''); return; }
+      let line = '';
+      for (const ch of para) {
+        if (tmp.measureText(line + ch).width > maxW && line) {
+          wrapped.push(line);
+          line = ch;
+        } else {
+          line += ch;
+        }
+      }
+      if (line) wrapped.push(line);
+    });
+
+    const H = Math.max(1500, padY * 2 + wrapped.length * lineH + 40);
+    const blocks = [];
+    wrapped.forEach((line, i) => {
+      if (!line.trim()) return;
+      const wPx = Math.min(maxW, tmp.measureText(line).width + 8);
+      blocks.push({
+        text: line,
+        x: +(padX / W).toFixed(4),
+        y: +((padY + i * lineH) / H).toFixed(4),
+        w: +(wPx / W).toFixed(4),
+        h: +((lineH * 0.72) / H).toFixed(4),
+      });
+    });
+    return renderCleanLayoutCanvas([{ aspectRatio: W / H, blocks }]);
+  }
+
+  function openScanLightbox(imageUrl, layout) {
+    const box = $('#scanLightboxBackdrop');
+    const img = $('#scanLightboxImg');
+    const overlay = $('#scanLightboxOverlay');
+    const title = $('#scanLightboxTitle');
+    if (!box || !img || !overlay) return;
+    state.lightboxLayout = layout || null;
+    img.src = imageUrl;
+    const blocks = (layout && Array.isArray(layout.blocks)) ? layout.blocks : [];
+    title.textContent = blocks.length
+      ? `净版扫描页 · ${blocks.length} 处版面文字（点文字块可复制）`
+      : '扫描页预览';
+    overlay.innerHTML = blocks.map((b, i) => (
+      `<div class="scan-layout-box" data-layout-copy="${i}" title="点击复制" style="left:${(b.x * 100).toFixed(2)}%;top:${(b.y * 100).toFixed(2)}%;width:${(b.w * 100).toFixed(2)}%;height:${(b.h * 100).toFixed(2)}%"></div>`
+    )).join('');
+    $('#scanLightboxCopyAllBtn')?.classList.toggle('hidden', !blocks.length);
+    box.classList.remove('hidden');
+  }
+
+  function closeScanLightbox() {
+    $('#scanLightboxBackdrop')?.classList.add('hidden');
+  }
+
   async function runOcr(dataUrl, opts = {}) {
     if (!dataUrl) return;
     const ocrCfg = getMeta('ocrConfig', { mode: 'auto', ocrSpaceKeys: [] }) || { mode: 'auto', ocrSpaceKeys: [] };
@@ -2914,7 +3081,7 @@
       ? ['vision_ai', 'apple', 'ocrspace']
       : (mode === 'ocrspace' ? ['ocrspace', 'apple', 'vision_ai'] : ['apple', 'vision_ai', 'ocrspace']);
 
-    setOcrStatus('正在识别书页文字…');
+    setOcrStatus('正在识别版面并去除背景噪声…');
     for (const engine of order) {
       if (engine === 'apple' && bridge.available && !opts.skipApple) {
         const base64 = dataUrl.split(',')[1] || '';
@@ -2925,32 +3092,40 @@
         const visionNodes = getAiPool().filter((p) => p.visionModel && p.keys.length);
         if (visionNodes.length) {
           try {
-            setOcrStatus('正在用免费视觉大模型识别…');
+            setOcrStatus('正在用视觉大模型提取版面文字…');
             const text = await ocrWithVisionPool(dataUrl);
             if (text) {
-              appendToNoteText(text);
-              setOcrStatus(`视觉大模型识别完成 · ${text.length} 字`);
-              toast('扫描文字已提取');
-              return;
+              const rendered = renderCleanPageFromPlainText(text);
+              if (rendered) {
+                state.noteLayout = rendered.layout;
+                setNoteImage(rendered.dataUrl);
+                setOcrStatus(`已生成净版扫描页（视觉模型 · ${rendered.layout.blocks.length} 行 · 点击放大）`);
+                toast('净版扫描页已生成，点击可全屏查看');
+                return;
+              }
             }
           } catch { /* fallback to next engine */ }
         }
       }
       if (engine === 'ocrspace') {
         try {
-          setOcrStatus('正在用免费 OCR.space API 识别…');
+          setOcrStatus('正在用免费 OCR.space 生成净版扫描页…');
           const text = await ocrWithOcrSpace(dataUrl);
           if (text) {
-            appendToNoteText(text);
-            setOcrStatus(`OCR.space 识别完成 · ${text.length} 字`);
-            toast('扫描文字已提取');
-            return;
+            const rendered = renderCleanPageFromPlainText(text);
+            if (rendered) {
+              state.noteLayout = rendered.layout;
+              setNoteImage(rendered.dataUrl);
+              setOcrStatus(`已生成净版扫描页（OCR.space · ${rendered.layout.blocks.length} 行 · 点击放大）`);
+              toast('净版扫描页已生成，点击可全屏查看');
+              return;
+            }
           }
         } catch { /* fallback to next engine */ }
       }
     }
-    setOcrStatus('未能自动识别文字，可手动输入或在「设置」配置视觉大模型 / OCR Key');
-    toast('图片已保存；可手动补充或在设置添加免费 OCR Key');
+    setOcrStatus('已保留原图（未识别到文字，可点击放大查看）');
+    toast('未识别到文字，已保留原图');
   }
 
   async function ocrWithVisionPool(dataUrl) {
@@ -3040,8 +3215,41 @@
     $('#rerunOcrBtn')?.addEventListener('click', () => { if (state.noteImage) runOcr(state.noteImage); });
     $('#removeNotePhotoBtn')?.addEventListener('click', () => {
       setNoteImage(null);
+      state.noteLayout = null;
       $('#notePhotoInput').value = '';
       setOcrStatus('扫描图已移除');
+    });
+    $('#noteScanPreviewImg')?.addEventListener('click', () => {
+      if (state.noteImage) openScanLightbox(state.noteImage, state.noteLayout);
+    });
+    $('#scanLightboxCloseBtn')?.addEventListener('click', closeScanLightbox);
+    $('#scanLightboxBackdrop')?.addEventListener('click', (e) => {
+      if (e.target.id === 'scanLightboxBackdrop' || e.target.classList.contains('scan-lightbox-stage')) {
+        closeScanLightbox();
+      }
+    });
+    $('#scanLightboxOverlay')?.addEventListener('click', async (e) => {
+      const box = e.target.closest('[data-layout-copy]');
+      if (!box || !state.lightboxLayout) return;
+      const b = state.lightboxLayout.blocks[parseInt(box.dataset.layoutCopy, 10)];
+      if (!b || !b.text) return;
+      try {
+        await navigator.clipboard.writeText(b.text);
+        toast(`已复制：${b.text.slice(0, 18)}${b.text.length > 18 ? '…' : ''}`);
+      } catch {
+        toast(b.text);
+      }
+    });
+    $('#scanLightboxCopyAllBtn')?.addEventListener('click', async () => {
+      const blocks = (state.lightboxLayout && state.lightboxLayout.blocks) || [];
+      if (!blocks.length) return;
+      const allText = blocks.map((b) => b.text).join('\n');
+      try {
+        await navigator.clipboard.writeText(allText);
+        toast(`已复制整页文字（${allText.length} 字）`);
+      } catch {
+        toast('复制失败，请长按选择');
+      }
     });
     $('#saveNoteBtn')?.addEventListener('click', async () => {
       const book = getBook(state.noteBookId);
@@ -3054,6 +3262,7 @@
         content,
         page: ($('#notePageInput').value || '').trim(),
         image: state.noteImage || '',
+        layout: state.noteLayout || null,
         createdAt: Date.now(),
       };
       book.notes.push(note);

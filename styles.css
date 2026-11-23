@@ -2636,6 +2636,85 @@ textarea.form-control {
   white-space: nowrap;
 }
 
+/* Fullscreen Clean Scanned Page Lightbox */
+.scan-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  background: rgba(16, 18, 20, 0.92);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--safe-top, env(safe-area-inset-top, 0px));
+  padding-bottom: var(--safe-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+.scan-lightbox.hidden {
+  display: none;
+}
+
+.scan-lightbox-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  color: #f3efe6;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.scan-lightbox-stage {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px 12px 32px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.scan-lightbox-canvas-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  background: #faf7f0;
+}
+
+.scan-lightbox-canvas-wrap img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.scan-layout-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.scan-layout-box {
+  position: absolute;
+  border-radius: 3px;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.14s ease, outline-color 0.14s ease;
+}
+
+.scan-layout-box:active,
+.scan-layout-box:hover {
+  background: rgba(47, 99, 84, 0.14);
+  outline: 1px solid rgba(47, 99, 84, 0.45);
+}
+
+.note-card-img,
+#noteScanPreviewImg {
+  cursor: zoom-in;
+}
+
 /* Reading Log Items */
 .session-row {
   display: flex;

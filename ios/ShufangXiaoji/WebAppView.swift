@@ -337,11 +337,16 @@ extension WebAppViewController: WKScriptMessageHandler {
             return
         }
         let languages = (body["languages"] as? [String]) ?? ["zh-Hans", "en-US"]
-        VisionOCR.recognize(imageBase64: base64, languages: languages) { [weak self] text in
+        VisionOCR.recognizeLayout(imageBase64: base64, languages: languages) { [weak self] res in
             guard let self = self else { return }
-            let ok = (text != nil)
-            let js = "ShufangNative && ShufangNative.onOcrResult(\(self.jsLiteral(text ?? "")), \(ok ? "true" : "false"))"
-            self.runJS(js)
+            if let res = res, !res.blocks.isEmpty,
+               let jsonData = try? JSONSerialization.data(withJSONObject: [["aspectRatio": res.aspectRatio, "blocks": res.blocks]], options: []),
+               let layoutJson = String(data: jsonData, encoding: .utf8) {
+                let js = "ShufangNative && ShufangNative.onDocumentLayoutScanned && ShufangNative.onDocumentLayoutScanned(\(self.jsLiteral(base64)), \(self.jsLiteral(layoutJson)), 1)"
+                self.runJS(js)
+            } else {
+                self.runJS("ShufangNative && ShufangNative.onOcrResult('', false)")
+            }
         }
     }
 
@@ -543,17 +548,20 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
         }
         guard let firstBase64 = pagesBase64.first else { return }
 
-        // 逐页使用 Apple Vision 离线识别中文，再按页顺序拼接
+        // 逐页使用 Apple Vision 离线识别精确版面框 (x, y, w, h + text)，用于渲染无背景噪声的净版原图
         let group = DispatchGroup()
-        var results = Array(repeating: "", count: pagesBase64.count)
+        var pageLayouts: [[String: Any]?] = Array(repeating: nil, count: pagesBase64.count)
         let lock = NSLock()
 
         for (idx, b64) in pagesBase64.enumerated() {
             group.enter()
-            VisionOCR.recognize(imageBase64: b64, languages: ["zh-Hans", "en-US"]) { text in
-                if let t = text, !t.isEmpty {
+            VisionOCR.recognizeLayout(imageBase64: b64, languages: ["zh-Hans", "en-US"]) { res in
+                if let res = res, !res.blocks.isEmpty {
                     lock.lock()
-                    results[idx] = t
+                    pageLayouts[idx] = [
+                        "aspectRatio": res.aspectRatio,
+                        "blocks": res.blocks,
+                    ]
                     lock.unlock()
                 }
                 group.leave()
@@ -562,8 +570,15 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
 
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
-            let combined = results.filter { !$0.isEmpty }.joined(separator: "\n\n")
-            let js = "ShufangNative && ShufangNative.onDocumentScanned && ShufangNative.onDocumentScanned(\(self.jsLiteral(firstBase64)), \(self.jsLiteral(combined)), \(pageCount))"
+            let validPages = pageLayouts.compactMap { $0 }
+            let layoutJson: String
+            if let data = try? JSONSerialization.data(withJSONObject: validPages, options: []),
+               let str = String(data: data, encoding: .utf8) {
+                layoutJson = str
+            } else {
+                layoutJson = "[]"
+            }
+            let js = "ShufangNative && ShufangNative.onDocumentLayoutScanned && ShufangNative.onDocumentLayoutScanned(\(self.jsLiteral(firstBase64)), \(self.jsLiteral(layoutJson)), \(pageCount))"
             self.runJS(js)
         }
     }

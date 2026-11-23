@@ -1006,6 +1006,23 @@
     </div>
   </div>
 
+  <!-- Sheet 11: Fullscreen Clean Scanned Page Lightbox (with interactive layout text overlay) -->
+  <div class="scan-lightbox hidden" id="scanLightboxBackdrop" role="dialog" aria-modal="true" aria-label="净版扫描页预览">
+    <div class="scan-lightbox-bar">
+      <span id="scanLightboxTitle">净版扫描页 · 点击文字块可复制</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button type="button" class="btn btn-soft btn-sm" id="scanLightboxCopyAllBtn">复制整页</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="scanLightboxCloseBtn">关闭</button>
+      </div>
+    </div>
+    <div class="scan-lightbox-stage">
+      <div class="scan-lightbox-canvas-wrap" id="scanLightboxWrap">
+        <img id="scanLightboxImg" alt="净版扫描页">
+        <div class="scan-layout-overlay" id="scanLightboxOverlay"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div class="toast" id="toast" role="status" aria-live="polite">
     <span id="toastText"></span>
