@@ -2550,9 +2550,10 @@
         t.elapsedMs = 0;
         t.startedAt = 0;
         persistTimer();
-      } else if (!t.bookId) {
+      } else if (!t.bookId || !getBook(t.bookId)) {
         const fallback = options[0] ? options[0].id : null;
         t.bookId = fallback;
+        persistTimer();
       }
     }
     if (select && t.bookId) select.value = t.bookId;
