@@ -33,7 +33,7 @@ enum VisionOCR {
 
         let input = CIImage(cgImage: cgImage)
         let extent = input.extent
-        let blurRadius = max(24.0, min(90.0, Double(min(extent.width, extent.height)) * 0.035))
+        let blurRadius = max(24.0, min(90.0, Double(min(extent.width, extent.height)) * 0.04))
 
         // 1. 估计局部纸张光照与阴影背景
         let clamped = input.clampedToExtent()
@@ -42,26 +42,39 @@ enum VisionOCR {
         blurFilter.setValue(blurRadius, forKey: kCIInputRadiusKey)
         guard let blurred = blurFilter.outputImage?.cropped(to: extent) else { return image }
 
-        // 2. 光照除法归一化（CIDivideBlendMode: inputImage / backgroundImage）
-        // 阴影区域与泛黄纸底自动趋近纯白 1.0，深色文字与彩色划线清晰保留
+        // 2. 光照除法归一化（CoreImage CIDivideBlendMode 公式为 background / input，
+        //    因此 background=原图, input=模糊光照背景，阴影与泛黄底色自动趋近纯白 1.0）
         guard let divideFilter = CIFilter(name: "CIDivideBlendMode") else { return image }
-        divideFilter.setValue(input, forKey: kCIInputImageKey)
-        divideFilter.setValue(blurred, forKey: kCIInputBackgroundImageKey)
+        divideFilter.setValue(blurred, forKey: kCIInputImageKey)
+        divideFilter.setValue(input, forKey: kCIInputBackgroundImageKey)
         guard let normalized = divideFilter.outputImage?.cropped(to: extent) else { return image }
 
-        // 3. 对比度与白点增强（让纸底彻底干净如电子文档，文字黑度扎实）
+        // 3. 转为高净度灰度，彻底消除纸张偏黄/边角偏蓝底色
         var current = normalized
-        if let colorFilter = CIFilter(name: "CIColorControls") {
-            colorFilter.setValue(current, forKey: kCIInputImageKey)
-            colorFilter.setValue(1.38, forKey: kCIInputContrastKey)
-            colorFilter.setValue(0.06, forKey: kCIInputBrightnessKey)
-            colorFilter.setValue(1.08, forKey: kCIInputSaturationKey)
-            if let out = colorFilter.outputImage?.cropped(to: extent) {
+        if let grayFilter = CIFilter(name: "CIColorControls") {
+            grayFilter.setValue(current, forKey: kCIInputImageKey)
+            grayFilter.setValue(0.0, forKey: kCIInputSaturationKey)
+            grayFilter.setValue(1.0, forKey: kCIInputContrastKey)
+            grayFilter.setValue(0.0, forKey: kCIInputBrightnessKey)
+            if let out = grayFilter.outputImage?.cropped(to: extent) {
                 current = out
             }
         }
 
-        // 4. 轻度亮度锐化，让印刷字边缘更清晰
+        // 4. WPS 级黑白文档色阶曲线：深色笔迹压成浓黑，纸底与阴影彻底漂白为纯白 #FFFFFF
+        if let toneCurve = CIFilter(name: "CIToneCurve") {
+            toneCurve.setValue(current, forKey: kCIInputImageKey)
+            toneCurve.setValue(CIVector(x: 0.0, y: 0.0), forKey: "inputPoint0")
+            toneCurve.setValue(CIVector(x: 0.46, y: 0.01), forKey: "inputPoint1")
+            toneCurve.setValue(CIVector(x: 0.72, y: 0.42), forKey: "inputPoint2")
+            toneCurve.setValue(CIVector(x: 0.91, y: 0.99), forKey: "inputPoint3")
+            toneCurve.setValue(CIVector(x: 1.0, y: 1.0), forKey: "inputPoint4")
+            if let out = toneCurve.outputImage?.cropped(to: extent) {
+                current = out
+            }
+        }
+
+        // 5. 轻度锐化笔锋，让手写与印刷字边缘更清晰
         if let sharpen = CIFilter(name: "CISharpenLuminance") {
             sharpen.setValue(current, forKey: kCIInputImageKey)
             sharpen.setValue(0.45, forKey: kCIInputSharpnessKey)
