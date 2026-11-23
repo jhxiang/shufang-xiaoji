@@ -210,12 +210,24 @@
     }, 120);
   }
 
+  const FALLBACK_SNAPSHOT_KEY = 'shufang.fallback.snapshot.v2';
+
+  function writeLocalFallback(payload) {
+    try {
+      if (payload && payload.length < 3_500_000) {
+        localStorage.setItem(FALLBACK_SNAPSHOT_KEY, payload);
+      }
+    } catch { /* ignore quota */ }
+  }
+
   function flushNativeSave() {
-    if (!bridge.available) return;
     clearTimeout(nativeSaveTimer);
     try {
       const payload = snapshotPayload();
-      bridge.post({ type: 'saveSnapshot', data: payload });
+      writeLocalFallback(payload);
+      if (bridge.available) {
+        bridge.post({ type: 'saveSnapshot', data: payload });
+      }
     } catch { /* ignore */ }
   }
 
@@ -422,6 +434,7 @@
     detailBookId: null,
     detailTab: 'overview',
     addMode: 'search',
+    quickAddStatus: 'reading',
     editingId: null,
     coverData: null,
     formRating: 0,
@@ -432,6 +445,8 @@
     dailyOffset: 0,
     dailyQuotes: [],
     recommendations: [],
+    recBatch: 0,
+    seenRecTitles: new Set(),
     onlineRecs: [],
     onlineRecKey: '',
     onlineRecLoading: false,
@@ -1370,6 +1385,12 @@
       $('#onlineBookQuery').value = tag.dataset.bookHot;
       searchOnlineBooks(tag.dataset.bookHot);
     });
+    $('#quickAddStatusSeg')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-quick-status]');
+      if (!btn) return;
+      state.quickAddStatus = btn.dataset.quickStatus || 'reading';
+      $$('#quickAddStatusSeg .seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    });
     $('#onlineBookList')?.addEventListener('click', (e) => {
       const addBtn = e.target.closest('[data-add-result]');
       const editBtn = e.target.closest('[data-edit-result]');
@@ -1377,13 +1398,14 @@
       const idx = parseInt((addBtn || editBtn).dataset.addResult || (addBtn || editBtn).dataset.editResult, 10);
       const item = state.searchResults[idx];
       if (!item) return;
-      if (addBtn) { quickAddBook(item); }
+      const chosenStatus = state.quickAddStatus || 'reading';
+      if (addBtn) { quickAddBook(item, chosenStatus); }
       else {
         const draft = normalizeBook({
           title: item.title, author: item.author, genre: item.genre,
           pages: item.pages, wordsWan: item.wordsWan, summary: item.summary,
           coverUrl: item.coverUrl, spineColor: item.spineColor,
-          status: 'want', createdAt: Date.now(), updatedAt: Date.now(),
+          status: chosenStatus, createdAt: Date.now(), updatedAt: Date.now(),
         });
         fillBookForm(draft);
         state.editingId = null;
@@ -1452,9 +1474,10 @@
     toast(`《${book.title}》已放上书架`);
   }
 
-  async function quickAddBook(item) {
+  async function quickAddBook(item, preferredStatus) {
     const dup = state.books.find((b) => b.title === item.title && b.author === item.author);
     if (dup) { toast('这本书已在书架上'); return; }
+    const status = preferredStatus || state.quickAddStatus || 'reading';
     const book = normalizeBook({
       id: uid('bk'),
       title: item.title,
@@ -1465,13 +1488,14 @@
       summary: item.summary || '',
       coverUrl: item.coverUrl || '',
       spineColor: item.spineColor || pickColorFor(item.title),
-      status: 'want',
+      status,
+      progress: status === 'finished' ? 100 : 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
     await saveBook(book);
     syncBookColorFromCover(book);
-    toast(`《${book.title}》已加入想读`);
+    toast(`《${book.title}》已加入「${STATUS_LABELS[status] || '书架'}」`);
     if (state.searchResults.length) renderOnlineResults(state.searchResults);
     renderDaily();
   }
@@ -2499,6 +2523,7 @@
     const startBtn = $('#timerStartPauseBtn');
     if (startBtn) startBtn.textContent = t.running ? '暂停' : (sec > 2 ? '继续阅读' : '开始阅读');
     $('#timerFinishBtn')?.classList.toggle('hidden', sec < 1);
+    $('#timerDiscardBtn')?.classList.toggle('hidden', !t.running && sec < 1);
     const headerLabel = $('#headerTimerLabel');
     if (headerLabel) headerLabel.textContent = sec >= 1 ? `${Math.floor(sec / 60)}:${pad2(Math.floor(sec % 60))}` : '计时';
     $('#openTimerQuickBtn')?.classList.toggle('running', t.running);
@@ -2531,6 +2556,18 @@
       }
     }
     if (select && t.bookId) select.value = t.bookId;
+    // 默认把补记日期/时间初始化为当前日期时间，允许用户自由选择任意历史日期
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+    const dateInput = $('#manualDateInput');
+    if (dateInput) {
+      dateInput.max = todayStr;
+      if (!dateInput.value) dateInput.value = todayStr;
+    }
+    const timeInput = $('#manualTimeInput');
+    if (timeInput && !timeInput.value) {
+      timeInput.value = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    }
     updateTimerUI();
     openSheet('timerBackdrop');
   }
@@ -2565,12 +2602,39 @@
     updateTimerUI();
   }
 
+  function discardTimerSession() {
+    const t = state.timer;
+    t.running = false;
+    t.startedAt = 0;
+    t.elapsedMs = 0;
+    clearInterval(timerInterval);
+    window.AmbientAudio?.stop();
+    $$('#ambientSoundRow .ambient-chip').forEach((c) => c.classList.toggle('active', c.dataset.ambient === 'off'));
+    t.ambient = 'off';
+    persistTimer();
+    updateTimerUI();
+    toast('已撤销本次计时');
+  }
+
   async function finishTimerSession() {
     const t = state.timer;
     const ms = t.running ? t.elapsedMs + (Date.now() - t.startedAt) : t.elapsedMs;
     const minutes = Math.max(1, Math.round(ms / 60000));
     if (!t.bookId) { toast('请选择书籍'); return; }
-    if (ms < 30000) { toast('阅读不足 30 秒，暂不记录'); return; }
+    if (ms < 30000) {
+      // 不足 30 秒时暂停并保留「撤销」按钮，允许用户继续读或一键撤销放弃
+      if (t.running) {
+        t.elapsedMs = ms;
+        t.running = false;
+        t.startedAt = 0;
+        clearInterval(timerInterval);
+        window.AmbientAudio?.stop();
+        persistTimer();
+        updateTimerUI();
+      }
+      toast('阅读不足 30 秒，可继续阅读或点「撤销」放弃');
+      return;
+    }
     const book = getBook(t.bookId);
     const startedAt = Date.now() - ms;
     await addSession({ id: uid('ss'), bookId: t.bookId, startedAt, minutes, source: 'timer' });
@@ -2604,6 +2668,7 @@
     $('#openTimerQuickBtn')?.addEventListener('click', () => openTimer());
     $('#timerStartPauseBtn')?.addEventListener('click', startPauseTimer);
     $('#timerFinishBtn')?.addEventListener('click', finishTimerSession);
+    $('#timerDiscardBtn')?.addEventListener('click', discardTimerSession);
     $('#timerBookSelect')?.addEventListener('change', (e) => {
       if (state.timer.running) {
         toast('请先结束当前计时再切换书籍');
@@ -2625,20 +2690,34 @@
       else window.AmbientAudio?.setMode(mode);
     });
 
+    const dateInput = $('#manualDateInput');
     const timeInput = $('#manualTimeInput');
+    const initNow = new Date();
+    if (dateInput) {
+      const todayStr = `${initNow.getFullYear()}-${pad2(initNow.getMonth() + 1)}-${pad2(initNow.getDate())}`;
+      dateInput.value = todayStr;
+      dateInput.max = todayStr;
+    }
     if (timeInput) {
-      const d = new Date();
-      timeInput.value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      timeInput.value = `${pad2(initNow.getHours())}:${pad2(initNow.getMinutes())}`;
     }
     $('#saveManualSessionBtn')?.addEventListener('click', async () => {
       const mins = clamp(Math.round(num($('#manualMinInput').value, 0)), 1, 600);
       const bookId = $('#timerBookSelect')?.value || state.timer.bookId;
       if (!mins) { toast('请输入阅读分钟数'); return; }
       if (!bookId) { toast('请先选择书籍'); return; }
+      const dateVal = $('#manualDateInput')?.value || '';
       const timeVal = $('#manualTimeInput')?.value || '';
       const now = new Date();
       let startedAt = now.getTime() - mins * 60000;
-      if (timeVal) {
+      if (dateVal) {
+        const [yy, mo, dd] = dateVal.split('-').map((x) => parseInt(x, 10));
+        const [hh, mm] = (timeVal || `${pad2(now.getHours())}:${pad2(now.getMinutes())}`).split(':').map((x) => parseInt(x, 10));
+        const d = new Date(yy || now.getFullYear(), (mo || (now.getMonth() + 1)) - 1, dd || now.getDate(), hh || 0, mm || 0, 0, 0);
+        if (!Number.isNaN(d.getTime())) {
+          startedAt = Math.min(d.getTime(), now.getTime());
+        }
+      } else if (timeVal) {
         const [hh, mm] = timeVal.split(':').map((x) => parseInt(x, 10));
         const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh || 0, mm || 0, 0, 0);
         if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 1);
@@ -2655,7 +2734,7 @@
       renderStats();
       renderShelf();
       renderDaily();
-      toast(`已补记 ${fmtDuration(mins)}`);
+      toast(`已补记 ${dateKey(startedAt)} · ${fmtDuration(mins)}`);
       updateTimerUI();
     });
   }
@@ -3270,8 +3349,19 @@
       if (!poolMap.has(tk)) poolMap.set(tk, b);
     });
 
-    const daySeed = `${dateKey()}#${state.dailyOffset}`;
-    const scoredPool = [...poolMap.values()].map((b) => {
+    const allCands = [...poolMap.values()];
+    const prevBatchKeys = new Set((state.recommendations || []).map((b) => normalizeTitleKey(b.title)));
+    // 严格排除已看过的推荐书，保证手动「换一批」或定时刷新时 100% 全部替换
+    let freshCands = allCands.filter((b) => !state.seenRecTitles.has(normalizeTitleKey(b.title)));
+    if (freshCands.length < 4 && allCands.length >= 4) {
+      // 候选池看遍一轮后重置历史，仅排除刚刚展示的那一批 4 本
+      state.seenRecTitles = new Set(prevBatchKeys);
+      freshCands = allCands.filter((b) => !prevBatchKeys.has(normalizeTitleKey(b.title)));
+      if (freshCands.length < 4) freshCands = allCands;
+    }
+
+    const daySeed = `${dateKey()}#${state.dailyOffset}#${state.recBatch}`;
+    const scoredPool = freshCands.map((b) => {
       let rel = (genreScore.get(b.genre) || 0) * 1.45 + (authorScore.get(b.author) || 0) * 1.25;
       if (finishedGenres.has(b.genre)) rel += 1.0;
       if (b.wordsWan > 0 && state.books.length) {
@@ -3349,15 +3439,22 @@
 
     state.onlineRecLoading = true;
     try {
-      const results = await Promise.allSettled(queries.map((item) => fetchAppleBooks(item.q, 4500)));
+      const reqs = [];
+      queries.forEach((item) => {
+        reqs.push(fetchAppleBooks(item.q, 4500).then((r) => ({ ...r, reason: item.reason })));
+        if (bridge.available || isLocalDevProxy()) {
+          reqs.push(fetchWeReadBooks(item.q, 4500).then((r) => ({ ...r, reason: item.reason })));
+        }
+      });
+      const results = await Promise.allSettled(reqs);
       const collected = [];
-      results.forEach((res, idx) => {
-        if (res.status === 'fulfilled' && res.value.list.length) {
+      results.forEach((res) => {
+        if (res.status === 'fulfilled' && res.value.list && res.value.list.length) {
           res.value.list.slice(0, 6).forEach((b) => {
             collected.push({
               ...b,
               fromOnline: true,
-              onlineReason: queries[idx].reason,
+              onlineReason: res.value.reason,
               spineColor: pickColorFor(b.title),
             });
           });
@@ -3373,6 +3470,52 @@
     }
   }
 
+  const REC_INTERVAL_OPTIONS = [6, 24, 72];
+
+  function getRecIntervalHours() {
+    const h = Number(getMeta('recAutoIntervalHours', 6));
+    return REC_INTERVAL_OPTIONS.includes(h) ? h : 6;
+  }
+
+  function updateRecScheduleLabel() {
+    const el = $('#recScheduleBtn');
+    if (!el) return;
+    const hours = getRecIntervalHours();
+    const lastAt = Number(getMeta('recLastAutoAt', 0)) || Date.now();
+    const nextAt = lastAt + hours * 3600000;
+    const nextDate = new Date(nextAt);
+    const label = hours === 6 ? '每 6 小时' : (hours === 24 ? '每天' : '每 3 天');
+    const nextText = `${pad2(nextDate.getHours())}:${pad2(nextDate.getMinutes())}`;
+    el.textContent = `⏱ ${label}自动刷新 · 下次 ${nextText}（点击切换）`;
+  }
+
+  function checkAutoRefreshRecommendations() {
+    const hours = getRecIntervalHours();
+    const lastAt = Number(getMeta('recLastAutoAt', 0));
+    const now = Date.now();
+    if (!lastAt) {
+      setMeta('recLastAutoAt', now);
+      updateRecScheduleLabel();
+      return;
+    }
+    if (now - lastAt >= hours * 3600000) {
+      (state.recommendations || []).forEach((b) => state.seenRecTitles.add(normalizeTitleKey(b.title)));
+      state.recBatch += 1;
+      setMeta('recLastAutoAt', now);
+      renderRecommendations(false);
+    } else {
+      updateRecScheduleLabel();
+    }
+  }
+
+  function refreshRecommendationsManually() {
+    (state.recommendations || []).forEach((b) => state.seenRecTitles.add(normalizeTitleKey(b.title)));
+    state.recBatch += 1;
+    setMeta('recLastAutoAt', Date.now());
+    renderRecommendations(false);
+    toast('已为你换上全新一批好书 ✨');
+  }
+
   function renderRecommendations(skipFetch = false) {
     state.recommendations = computeRecommendations();
     const list = $('#recommendedBooksList');
@@ -3381,7 +3524,7 @@
       <div class="rec-card">
         <div class="rec-cover" style="--spine-bg:${esc(b.spineColor || pickColorFor(b.title))}">
           ${typoCover(b)}
-          ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+          ${b.coverUrl ? `<img src="${esc(b.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
         </div>
         <div class="rec-info">
           <div class="rec-title-row"><strong>${esc(b.title)}</strong><span class="mini-tag gold">${esc(b.genre)}</span></div>
@@ -3399,9 +3542,10 @@
       const { sortedGenres } = computeUserTaste();
       const top = sortedGenres.slice(0, 2).map((x) => x[0]);
       sub.textContent = top.length
-        ? `综合阅读时长、评分与「${top.join('」「')}」偏好（含联网发掘）`
-        : '综合内置精选与联网书库推荐，读几本后更懂你的口味';
+        ? `综合阅读时长、评分与「${top.join('」「')}」偏好（含全网发掘）`
+        : '综合精选与全网书库推荐，读几本后更懂你的口味';
     }
+    updateRecScheduleLabel();
 
     if (!skipFetch) maybeFetchOnlineRecommendations();
   }
@@ -3473,8 +3617,19 @@
       if (book) quickAddBook(book);
       renderRecommendations();
     });
+    $('#refreshRecBtn')?.addEventListener('click', refreshRecommendationsManually);
+    $('#recScheduleBtn')?.addEventListener('click', async () => {
+      const cur = getRecIntervalHours();
+      const idx = REC_INTERVAL_OPTIONS.indexOf(cur);
+      const next = REC_INTERVAL_OPTIONS[(idx + 1) % REC_INTERVAL_OPTIONS.length];
+      await setMeta('recAutoIntervalHours', next);
+      updateRecScheduleLabel();
+      const label = next === 6 ? '每 6 小时' : (next === 24 ? '每天' : '每 3 天');
+      toast(`已切换为「${label}自动刷新」`);
+    });
     $('#aiRecommendBtn')?.addEventListener('click', aiRecommendBooks);
     $('#aiInsightBtn')?.addEventListener('click', aiGenerateInsight);
+    setInterval(checkAutoRefreshRecommendations, 60000);
   }
 
   /* =============================== 摘录卡片 =============================== */
@@ -3912,6 +4067,114 @@
     toast('阅读计划已更新 ✓');
   }
 
+  function openInsightDetail(kind) {
+    const titleEl = $('#insightDetailTitle');
+    const subEl = $('#insightDetailSub');
+    const bodyEl = $('#insightDetailBody');
+    if (!bodyEl) return;
+
+    const noteTypeLabels = { reflection: '💭 读后感', quote: '❝ 书摘划线', scan: '📷 纸质扫描' };
+
+    if (kind === 'hours') {
+      const sessions = (state.sessions || []).slice().sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+      const totalMins = sessions.reduce((s, x) => s + (x.minutes || 0), 0);
+      titleEl.textContent = '累计阅读时长明细';
+      subEl.textContent = `共 ${sessions.length} 次记录 · 合计 ${fmtDuration(totalMins)}`;
+      if (!sessions.length) {
+        bodyEl.innerHTML = '<div class="inline-empty">还没有阅读计时记录，点右上角「计时」开始或补记一次阅读吧。</div>';
+      } else {
+        const groups = new Map();
+        sessions.forEach((s) => {
+          const dk = dateKey(s.startedAt);
+          if (!groups.has(dk)) groups.set(dk, []);
+          groups.get(dk).push(s);
+        });
+        bodyEl.innerHTML = [...groups.entries()].map(([dk, items]) => {
+          const dayMins = items.reduce((acc, x) => acc + (x.minutes || 0), 0);
+          return `<div class="insight-group-title"><span>${esc(dk)}</span><span>${esc(fmtDuration(dayMins))}</span></div>` +
+            items.map((s) => {
+              const b = getBook(s.bookId);
+              const d = new Date(s.startedAt);
+              const timeStr = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+              return `<div class="insight-item-card" data-insight-book="${esc(s.bookId || '')}">
+                <div class="insight-item-top">
+                  <span class="insight-item-title">${b ? `《${esc(b.title)}》` : '已移除书籍'}</span>
+                  <span class="mini-tag primary">${esc(fmtDuration(s.minutes || 0))}</span>
+                </div>
+                <div class="insight-item-top" style="margin-bottom:0">
+                  <span class="insight-item-sub">${timeStr} · ${s.source === 'manual' ? '手动补记' : '专注计时'}</span>
+                  <button type="button" class="text-link-btn danger" data-insight-del-session="${esc(s.id)}">删除</button>
+                </div>
+              </div>`;
+            }).join('');
+        }).join('');
+      }
+    } else if (kind === 'notes') {
+      const allNotes = [];
+      state.books.forEach((b) => {
+        (b.notes || []).forEach((n) => {
+          allNotes.push({ ...n, bookId: b.id, bookTitle: b.title, bookAuthor: b.author });
+        });
+      });
+      allNotes.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      titleEl.textContent = '读后感与书摘明细';
+      subEl.textContent = `共 ${allNotes.length} 条记录 · 点击可跳转对应书籍`;
+      if (!allNotes.length) {
+        bodyEl.innerHTML = '<div class="inline-empty">还没有写过读后感或书摘，点开一本书记录你的第一段感悟吧。</div>';
+      } else {
+        bodyEl.innerHTML = allNotes.map((n) => `
+          <div class="insight-item-card" data-insight-book="${esc(n.bookId)}" data-insight-tab="notes">
+            <div class="insight-item-top">
+              <span class="insight-item-title">《${esc(n.bookTitle)}》</span>
+              <span class="mini-tag">${esc(noteTypeLabels[n.type] || '笔记')}</span>
+            </div>
+            <div class="insight-note-body">${esc(n.text || '')}</div>
+            <div class="insight-item-sub">${n.page ? `P.${esc(n.page)} · ` : ''}${fmtDate(n.createdAt)}</div>
+          </div>`).join('');
+      }
+    } else if (kind === 'words') {
+      const list = state.books.map((b) => {
+        const total = b.wordsWan || 0;
+        const readWan = b.status === 'finished' ? total : +(total * ((b.progress || 0) / 100)).toFixed(1);
+        return { book: b, total, readWan };
+      }).filter((x) => x.total > 0 || x.readWan > 0).sort((a, b) => b.readWan - a.readWan || b.total - a.total);
+      const sumRead = list.reduce((s, x) => s + x.readWan, 0);
+      titleEl.textContent = '已读字数明细';
+      subEl.textContent = `累计已读约 ${sumRead.toFixed(1)} 万字 · 共 ${list.length} 本含字数书籍`;
+      if (!list.length) {
+        bodyEl.innerHTML = '<div class="inline-empty">还没有字数统计，录入书籍字数并更新进度后这里会展示明细。</div>';
+      } else {
+        bodyEl.innerHTML = list.map(({ book: b, total, readWan }) => `
+          <div class="insight-item-card" data-insight-book="${esc(b.id)}">
+            <div class="insight-item-top">
+              <span class="insight-item-title">《${esc(b.title)}》</span>
+              <span class="mini-tag primary">已读 ${readWan.toFixed(1)} 万字</span>
+            </div>
+            <div class="insight-item-sub">${esc(b.author || '佚名')} · ${esc(STATUS_LABELS[b.status] || '')} · 进度 ${b.status === 'finished' ? 100 : (b.progress || 0)}% · 全书 ${total.toFixed(1)} 万字</div>
+          </div>`).join('');
+      }
+    } else if (kind === 'rating') {
+      const rated = state.books.filter((b) => (b.rating || 0) > 0).sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      const avg = rated.length ? (rated.reduce((s, b) => s + b.rating, 0) / rated.length).toFixed(1) : '—';
+      titleEl.textContent = '书籍自主评分明细';
+      subEl.textContent = `已评分 ${rated.length} 本 · 平均 ${avg} 分`;
+      if (!rated.length) {
+        bodyEl.innerHTML = '<div class="inline-empty">还没有给书籍打分，打开任意书籍详情页即可评星。</div>';
+      } else {
+        bodyEl.innerHTML = rated.map((b) => `
+          <div class="insight-item-card" data-insight-book="${esc(b.id)}">
+            <div class="insight-item-top">
+              <span class="insight-item-title">《${esc(b.title)}》</span>
+              <span class="mini-tag gold">★ ${b.rating.toFixed(1)} 分</span>
+            </div>
+            <div class="insight-item-sub">${esc(b.author || '佚名')} · ${esc(b.genre || '')} · ${esc(STATUS_LABELS[b.status] || '')}</div>
+          </div>`).join('');
+      }
+    }
+
+    openSheet('insightDetailBackdrop');
+  }
+
   function bindStats() {
     $('#editGoalBtn')?.addEventListener('click', openPlanSheet);
     $('#planBookPresets')?.addEventListener('click', (e) => {
@@ -3919,6 +4182,30 @@
       if (btn) $('#planBooksInput').value = btn.dataset.planBooks;
     });
     $('#savePlanBtn')?.addEventListener('click', savePlanFromForm);
+    $('#statsKpiGrid')?.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-stat-detail]');
+      if (card) openInsightDetail(card.dataset.statDetail);
+    });
+    $('#insightDetailBody')?.addEventListener('click', async (e) => {
+      const delBtn = e.target.closest('[data-insight-del-session]');
+      if (delBtn) {
+        e.stopPropagation();
+        await removeSession(delBtn.dataset.insightDelSession);
+        toast('已删除该条阅读记录');
+        openInsightDetail('hours');
+        return;
+      }
+      const item = e.target.closest('[data-insight-book]');
+      if (!item) return;
+      const bid = item.dataset.insightBook;
+      const b = getBook(bid);
+      if (!b) return;
+      closeSheet('insightDetailBackdrop');
+      state.detailBookId = b.id;
+      state.detailTab = item.dataset.insightTab || 'overview';
+      openSheet('bookDetailBackdrop');
+      renderDetail();
+    });
   }
 
   /* =============================== 设置 / 备份 =============================== */
@@ -4360,6 +4647,24 @@ ${libraryDigest() || '（暂无）'}
         memAll('meta').forEach((r) => { state.meta[r.key] = r.value; });
       }
     }
+    // 终极兜底：若启动后书架为空但 localStorage 容错快照里有书，自动找回并回写原生磁盘
+    if (!state.books.length) {
+      try {
+        const fbRaw = localStorage.getItem(FALLBACK_SNAPSHOT_KEY);
+        if (fbRaw) {
+          const fb = JSON.parse(fbRaw);
+          if (fb && Array.isArray(fb.books) && fb.books.length) {
+            state.books = fb.books.map(normalizeBook);
+            if (!state.sessions.length && Array.isArray(fb.sessions)) state.sessions = fb.sessions;
+            if (Array.isArray(fb.meta)) fb.meta.forEach((r) => { if (r && r.key && !(r.key in state.meta)) state.meta[r.key] = r.value; });
+            memCache.books = state.books.slice();
+            memCache.sessions = state.sessions.slice();
+            stateReadyForSnapshot = true;
+            flushNativeSave();
+          }
+        }
+      } catch { /* ignore */ }
+    }
     stateReadyForSnapshot = true;
 
     applyTheme();
@@ -4376,6 +4681,7 @@ ${libraryDigest() || '（暂无）'}
     }
 
     renderAll();
+    checkAutoRefreshRecommendations();
     restoreTimer();
     updateTimerUI();
     registerSW();

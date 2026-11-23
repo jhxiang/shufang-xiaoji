@@ -162,8 +162,12 @@
           <div>
             <h2>为你精选荐书</h2>
             <small id="recReasonSub">基于你的阅读题材与评分偏好</small>
+            <div class="rec-schedule-line" id="recScheduleBtn" role="button" tabindex="0" title="点击切换自动刷新频率">⏱ 每日定时自动刷新</div>
           </div>
-          <button type="button" class="ai-pill-btn" id="aiRecommendBtn">✨ 豆包荐书</button>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <button type="button" class="text-link-btn" id="refreshRecBtn">换一批</button>
+            <button type="button" class="ai-pill-btn" id="aiRecommendBtn">✨ 豆包荐书</button>
+          </div>
         </div>
 
         <div class="rec-list" id="recommendedBooksList"></div>
@@ -206,23 +210,23 @@
         <div class="ai-insight-box hidden" id="aiInsightBox"></div>
 
         <!-- 4 Core KPIs -->
-        <div class="stats-grid">
-          <div class="stat-card">
-            <span class="stat-label">累计阅读时长</span>
+        <div class="stats-grid" id="statsKpiGrid">
+          <button type="button" class="stat-card clickable" data-stat-detail="hours">
+            <span class="stat-label">累计阅读时长 <span class="stat-arrow">›</span></span>
             <div class="stat-value" id="statTotalHours">0<small>小时</small></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">已读总字数</span>
+          </button>
+          <button type="button" class="stat-card clickable" data-stat-detail="words">
+            <span class="stat-label">已读总字数 <span class="stat-arrow">›</span></span>
             <div class="stat-value" id="statTotalWords">0<small>万字</small></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">读后感与摘录</span>
+          </button>
+          <button type="button" class="stat-card clickable" data-stat-detail="notes">
+            <span class="stat-label">读后感与摘录 <span class="stat-arrow">›</span></span>
             <div class="stat-value" id="statTotalNotes">0<small>条</small></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">平均自主评分</span>
+          </button>
+          <button type="button" class="stat-card clickable" data-stat-detail="rating">
+            <span class="stat-label">平均自主评分 <span class="stat-arrow">›</span></span>
             <div class="stat-value" id="statAvgRating">—<small>分</small></div>
-          </div>
+          </button>
         </div>
 
         <!-- Reading Time-of-Day Habit Card -->
@@ -468,6 +472,14 @@
             <input id="onlineBookQuery" class="form-control" type="search" placeholder="输入书名、作者或 ISBN 搜索…" enterkeyhint="search">
             <button type="button" class="btn btn-primary btn-sm" id="onlineBookSearchBtn" style="height:44px;padding:0 16px;flex-shrink:0">搜索</button>
           </div>
+          <div class="quick-status-bar">
+            <span class="quick-status-label">加入状态：</span>
+            <div class="seg-control compact" id="quickAddStatusSeg">
+              <button type="button" class="seg-btn active" data-quick-status="reading">📖 在读</button>
+              <button type="button" class="seg-btn" data-quick-status="want">🔖 想读</button>
+              <button type="button" class="seg-btn" data-quick-status="finished">✅ 已读</button>
+            </div>
+          </div>
           <div class="hot-tags" id="bookSearchHotTags">
             <button type="button" class="hot-tag" data-book-hot="三体">三体</button>
             <button type="button" class="hot-tag" data-book-hot="百年孤独">百年孤独</button>
@@ -616,18 +628,22 @@
           </div>
 
           <div class="timer-btn-row">
-            <button type="button" class="btn btn-primary" id="timerStartPauseBtn" style="min-width:130px">开始阅读</button>
+            <button type="button" class="btn btn-primary" id="timerStartPauseBtn" style="min-width:120px">开始阅读</button>
             <button type="button" class="btn btn-warm hidden" id="timerFinishBtn">结束并保存</button>
+            <button type="button" class="btn btn-secondary hidden" id="timerDiscardBtn">撤销</button>
           </div>
         </div>
 
         <!-- Quick Manual Time Entry -->
         <div class="manual-session-box">
-          <div class="manual-session-title">或手动补记一次阅读</div>
-          <div class="manual-session-row">
-            <input id="manualMinInput" class="form-control" type="number" min="1" max="600" placeholder="分钟(如 30)">
-            <input id="manualTimeInput" class="form-control" type="time">
-            <button type="button" class="btn btn-soft btn-sm" id="saveManualSessionBtn" style="height:44px;flex-shrink:0">补记</button>
+          <div class="manual-session-title">或手动补记一次阅读（支持补记历史日期）</div>
+          <div class="manual-session-grid">
+            <input id="manualDateInput" class="form-control" type="date" aria-label="补记日期">
+            <input id="manualTimeInput" class="form-control" type="time" aria-label="开始时间">
+          </div>
+          <div class="manual-session-row" style="margin-top:8px">
+            <input id="manualMinInput" class="form-control" type="number" min="1" max="600" placeholder="阅读分钟数（如 30）">
+            <button type="button" class="btn btn-soft btn-sm" id="saveManualSessionBtn" style="height:44px;padding:0 18px;flex-shrink:0">补记</button>
           </div>
         </div>
       </div>
@@ -917,6 +933,25 @@
         <button type="button" class="btn btn-secondary" data-close-sheet="quoteEditorBackdrop" style="flex:0.8">取消</button>
         <button type="button" class="btn btn-primary" id="saveQuoteBtn" style="flex:1.2">收录到金句库</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Sheet 10: Insight KPI Detail Modal -->
+  <div class="sheet-backdrop" id="insightDetailBackdrop" role="dialog" aria-modal="true" aria-labelledby="insightDetailTitle">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h3 id="insightDetailTitle">详情</h3>
+          <small id="insightDetailSub" style="color:var(--text-secondary);font-size:12px"></small>
+        </div>
+        <button class="sheet-close" data-close-sheet="insightDetailBackdrop" type="button" aria-label="关闭">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sheet-body" id="insightDetailBody"></div>
     </div>
   </div>
 

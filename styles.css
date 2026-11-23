@@ -1309,12 +1309,34 @@ input, textarea, select {
   border-radius: var(--radius-md);
   padding: 13px 14px;
   box-shadow: var(--shadow-sm);
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+}
+
+.stat-card.clickable {
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.stat-card.clickable:active {
+  transform: scale(0.97);
+  border-color: var(--primary);
 }
 
 .stat-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 12px;
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.stat-arrow {
+  font-size: 15px;
+  color: var(--text-tertiary);
+  line-height: 1;
 }
 
 .stat-value {
@@ -2481,6 +2503,100 @@ textarea.form-control {
 .manual-session-row {
   display: flex;
   gap: 8px;
+}
+
+.manual-session-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 8px;
+}
+
+.quick-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.quick-status-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.seg-control.compact {
+  flex: 1;
+  padding: 3px;
+}
+
+.seg-control.compact .seg-btn {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.rec-schedule-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--primary);
+  background: var(--primary-soft);
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.insight-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin: 12px 0 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.insight-group-title:first-child {
+  margin-top: 0;
+}
+
+.insight-item-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.insight-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.insight-item-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.insight-item-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.insight-note-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Reading Log Items */

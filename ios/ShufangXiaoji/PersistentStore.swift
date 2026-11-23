@@ -1,10 +1,10 @@
 //
 //  PersistentStore.swift
-//  原生磁盘快照存储。
+//  原生磁盘快照存储（Documents + Application Support + UserDefaults 三重保险）。
 //
 //  为什么需要它：在 WKWebView 的自定义 URL scheme（shufang://）下，
 //  WKWebsiteDataStore 对 IndexedDB / localStorage 的持久化并不可靠，
-//  因此把 Web 端数据以 JSON 快照形式同步原子写入 App 沙盒 Documents 目录，
+//  因此把 Web 端数据以 JSON 快照形式同步原子写入沙盒，
 //  启动时以 Base64 注入回页面，保证数据在强杀/重启/覆盖安装后永不丢失。
 //
 
@@ -16,6 +16,7 @@ final class PersistentStore {
 
     private let primaryURL: URL
     private let legacyURL: URL
+    private let defaultsKey = "com.shufang.xiaoji.snapshot.v2"
     private let queue = DispatchQueue(label: "com.shufang.xiaoji.store", qos: .userInitiated)
 
     private init() {
@@ -33,13 +34,16 @@ final class PersistentStore {
         self.legacyURL = legacyDir.appendingPathComponent("snapshot.json")
     }
 
-    /// 读取磁盘快照原始字节（优先 Documents，兼容旧版 Application Support）
+    /// 读取磁盘快照原始字节（Documents -> Application Support -> UserDefaults 三重兜底）
     private func loadSnapshotDataLocked() -> Data? {
         if let data = try? Data(contentsOf: primaryURL), !data.isEmpty {
             return data
         }
         if let data = try? Data(contentsOf: legacyURL), !data.isEmpty {
-            // 自动迁移到 Documents
+            try? data.write(to: primaryURL, options: .atomic)
+            return data
+        }
+        if let data = UserDefaults.standard.data(forKey: defaultsKey), !data.isEmpty {
             try? data.write(to: primaryURL, options: .atomic)
             return data
         }
@@ -62,14 +66,18 @@ final class PersistentStore {
         }
     }
 
-    /// 同步原子写入快照（保证强杀/重启 App 前数据已安全落盘）
+    /// 同步原子写入快照（Documents + Application Support + UserDefaults 三重落盘）
     func saveSnapshot(_ json: String) {
         guard let data = json.data(using: .utf8), !data.isEmpty else { return }
         queue.sync {
             do {
                 try data.write(to: primaryURL, options: .atomic)
-                // 同步保留一份到 Application Support 作为双保险
                 try? data.write(to: legacyURL, options: .atomic)
+                // 小于 3MB 时同步一份到 UserDefaults 作为终极兜底
+                if data.count < 3 * 1024 * 1024 {
+                    UserDefaults.standard.set(data, forKey: defaultsKey)
+                    UserDefaults.standard.synchronize()
+                }
             } catch {
                 NSLog("[小象阅痕] 快照写入失败: %@", error.localizedDescription)
             }
@@ -80,6 +88,8 @@ final class PersistentStore {
         queue.sync {
             try? FileManager.default.removeItem(at: primaryURL)
             try? FileManager.default.removeItem(at: legacyURL)
+            UserDefaults.standard.removeObject(forKey: defaultsKey)
+            UserDefaults.standard.synchronize()
         }
     }
 }

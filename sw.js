@@ -1,4 +1,4 @@
-const CACHE_NAME = 'shufang-xiaoji-v1-17';
+const CACHE_NAME = 'shufang-xiaoji-v1-18';
 const CORE_ASSETS = [
   './',
   './index.html',
