@@ -13,23 +13,30 @@ enum VisionOCR {
 
     struct LayoutResult {
         let text: String
+        let width: Int
+        let height: Int
         let aspectRatio: Double
         let blocks: [[String: Any]]
     }
 
-    /// 识别图片中的文字及其精确版面坐标（左上角原点归一化 0..1）
+    /// 识别图片中的文字及其精确版面坐标（左上角原点归一化 0..1，严格对齐原图真实宽高）
     static func recognizeLayout(imageBase64: String, languages: [String], completion: @escaping (LayoutResult?) -> Void) {
         guard let data = Data(base64Encoded: imageBase64, options: .ignoreUnknownCharacters),
-              let image = UIImage(data: data),
-              let cgImage = image.cgImage else {
+              let rawImage = UIImage(data: data) else {
             completion(nil)
             return
         }
 
-        let orientation = cgImageOrientation(from: image.imageOrientation)
-        let imgW = Double(image.size.width)
-        let imgH = Double(image.size.height)
-        let aspectRatio = (imgW > 0 && imgH > 0) ? (imgW / imgH) : 0.72
+        // 先规范化为 .up 方向，确保原图尺寸、像素和 Vision 坐标三者 100% 严格一致
+        let image = normalizedUpImage(rawImage)
+        guard let cgImage = image.cgImage else {
+            completion(nil)
+            return
+        }
+
+        let imgW = cgImage.width
+        let imgH = cgImage.height
+        let aspectRatio = (imgW > 0 && imgH > 0) ? (Double(imgW) / Double(imgH)) : 0.72
 
         DispatchQueue.global(qos: .userInitiated).async {
             let request = VNRecognizeTextRequest()
@@ -42,7 +49,7 @@ enum VisionOCR {
             let wanted = languages.filter { supported.contains($0) }
             request.recognitionLanguages = wanted.isEmpty ? ["zh-Hans", "en-US"] : wanted
 
-            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
+            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
             do {
                 try handler.perform([request])
                 let observations = request.results ?? []
@@ -87,13 +94,24 @@ enum VisionOCR {
                 }
 
                 let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                let res = LayoutResult(text: text, aspectRatio: aspectRatio, blocks: blocks)
+                let res = LayoutResult(text: text, width: imgW, height: imgH, aspectRatio: aspectRatio, blocks: blocks)
                 DispatchQueue.main.async {
                     completion(blocks.isEmpty ? nil : res)
                 }
             } catch {
                 DispatchQueue.main.async { completion(nil) }
             }
+        }
+    }
+
+    /// 将任意 EXIF 方向的 UIImage 规范化为 .up，保证像素坐标与视觉坐标 1:1 严格对齐
+    private static func normalizedUpImage(_ image: UIImage) -> UIImage {
+        if image.imageOrientation == .up { return image }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = image.scale
+        let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
         }
     }
 

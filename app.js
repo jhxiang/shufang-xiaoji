@@ -2919,23 +2919,27 @@
     });
   }
 
-  /** 将精确版面框 (x, y, w, h + text) 渲染为去除所有背景噪声的净版电子书页图 */
+  /** 将精确版面框 (x, y, w, h + text) 渲染为与原图 1:1 严格对齐、零背景噪声的净版书页图 */
   function renderCleanLayoutCanvas(pagesLayout) {
     const pages = (Array.isArray(pagesLayout) ? pagesLayout : []).filter((p) => p && Array.isArray(p.blocks) && p.blocks.length);
     if (!pages.length) return null;
 
+    // 单页时 0 间距、1:1 严格对齐原图真实宽高比；多页时每页也保持原图真实宽高比
     const W = 1200;
-    const gap = 28;
+    const gap = pages.length > 1 ? 24 : 0;
     const pageHeights = pages.map((p) => {
-      const ar = clamp(Number(p.aspectRatio) || 0.72, 0.42, 1.8);
-      return Math.round(W / ar);
+      const pw = Number(p.width) || 0;
+      const ph = Number(p.height) || 0;
+      const ar = (pw > 0 && ph > 0) ? (pw / ph) : (Number(p.aspectRatio) || 0.72);
+      return Math.max(200, Math.round(W / ar));
     });
-    const totalH = pageHeights.reduce((s, h) => s + h, 0) + gap * (pages.length - 1);
+    const rawTotalH = pageHeights.reduce((s, h) => s + h, 0) + gap * (pages.length - 1);
+    const maxCanvasH = 6400;
+    const scaleAll = rawTotalH > maxCanvasH ? (maxCanvasH / rawTotalH) : 1;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = Math.min(totalH, 6400);
-    const scaleAll = canvas.height / totalH;
+    canvas.width = Math.round(W * scaleAll);
+    canvas.height = Math.round(rawTotalH * scaleAll);
     const ctx = canvas.getContext('2d');
 
     // 纯净纸底，彻底去除原照片阴影、手指、折痕与杂色噪声
@@ -2948,39 +2952,49 @@
     pages.forEach((page, pIdx) => {
       const ph = pageHeights[pIdx] * scaleAll;
       const py = offsetY * scaleAll;
+      const pw = canvas.width;
 
-      // 单页温润纸白画布 + 细腻纸边
+      // 单页温润纸白画布，与原图 1:1 严格重合（0 边距偏移）
       ctx.fillStyle = '#FAF7F0';
-      ctx.fillRect(0, py, canvas.width, ph);
-      ctx.strokeStyle = 'rgba(130, 114, 92, 0.16)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(1, py + 1, canvas.width - 2, ph - 2);
+      ctx.fillRect(0, py, pw, ph);
 
-      // 按原图版面框坐标精确绘制每一行文字
       ctx.fillStyle = '#23201C';
-      ctx.textBaseline = 'middle';
+      ctx.textBaseline = 'alphabetic';
 
       page.blocks.forEach((b) => {
         const text = String(b.text || '').trim();
         if (!text) return;
-        const bx = clamp(Number(b.x) || 0, 0, 0.98) * canvas.width;
-        const by = py + clamp(Number(b.y) || 0, 0, 0.98) * ph;
-        const bw = Math.max(24, clamp(Number(b.w) || 0.2, 0.02, 1) * canvas.width);
-        const bh = Math.max(14, clamp(Number(b.h) || 0.025, 0.01, 0.25) * ph);
+        // 严格按原图归一化坐标映射到画布像素
+        const nx = clamp(Number(b.x) || 0, 0, 0.995);
+        const ny = clamp(Number(b.y) || 0, 0, 0.995);
+        const nw = clamp(Number(b.w) || 0.1, 0.005, 1 - nx);
+        const nh = clamp(Number(b.h) || 0.02, 0.004, 1 - ny);
 
-        let fontSize = clamp(Math.round(bh * 0.84), 14, 64);
+        const bx = nx * pw;
+        const by = py + ny * ph;
+        const bw = nw * pw;
+        const bh = nh * ph;
+
+        // 按原图该行高度计算贴合字号，并用实际字形包围盒垂直精确居中对齐到原图版面框
+        const fontSize = clamp(bh * 0.86, 10, 96);
         const fontFamily = '"Songti SC", "Noto Serif SC", "PingFang SC", Georgia, serif';
         ctx.font = `500 ${fontSize}px ${fontFamily}`;
-        const measured = ctx.measureText(text).width;
+        const metrics = ctx.measureText(text);
+        const measuredW = metrics.width || bw;
+        const ascent = metrics.actualBoundingBoxAscent != null ? metrics.actualBoundingBoxAscent : fontSize * 0.78;
+        const descent = metrics.actualBoundingBoxDescent != null ? metrics.actualBoundingBoxDescent : fontSize * 0.18;
+        const glyphH = ascent + descent;
+        const baselineY = by + (bh - glyphH) / 2 + ascent;
 
         ctx.save();
-        if (measured > bw * 1.04 && measured > 0) {
-          const sx = bw / measured;
-          ctx.translate(bx, by + bh / 2);
-          ctx.scale(sx, 1);
+        // 精确贴合原图该行版面框的左右起止范围
+        const ratio = measuredW > 0 ? (bw / measuredW) : 1;
+        if (ratio < 0.98 || (ratio > 1.03 && ratio < 1.28)) {
+          ctx.translate(bx, baselineY);
+          ctx.scale(ratio, 1);
           ctx.fillText(text, 0, 0);
         } else {
-          ctx.fillText(text, bx, by + bh / 2);
+          ctx.fillText(text, bx, baselineY);
         }
         ctx.restore();
 
@@ -3000,6 +3014,8 @@
     return {
       dataUrl,
       layout: {
+        width: canvas.width,
+        height: canvas.height,
         aspectRatio: +(canvas.width / canvas.height).toFixed(4),
         blocks: combinedBlocks,
       },

@@ -340,7 +340,7 @@ extension WebAppViewController: WKScriptMessageHandler {
         VisionOCR.recognizeLayout(imageBase64: base64, languages: languages) { [weak self] res in
             guard let self = self else { return }
             if let res = res, !res.blocks.isEmpty,
-               let jsonData = try? JSONSerialization.data(withJSONObject: [["aspectRatio": res.aspectRatio, "blocks": res.blocks]], options: []),
+               let jsonData = try? JSONSerialization.data(withJSONObject: [["width": res.width, "height": res.height, "aspectRatio": res.aspectRatio, "blocks": res.blocks]], options: []),
                let layoutJson = String(data: jsonData, encoding: .utf8) {
                 let js = "ShufangNative && ShufangNative.onDocumentLayoutScanned && ShufangNative.onDocumentLayoutScanned(\(self.jsLiteral(base64)), \(self.jsLiteral(layoutJson)), 1)"
                 self.runJS(js)
@@ -559,6 +559,8 @@ extension WebAppViewController: VNDocumentCameraViewControllerDelegate {
                 if let res = res, !res.blocks.isEmpty {
                     lock.lock()
                     pageLayouts[idx] = [
+                        "width": res.width,
+                        "height": res.height,
                         "aspectRatio": res.aspectRatio,
                         "blocks": res.blocks,
                     ]
