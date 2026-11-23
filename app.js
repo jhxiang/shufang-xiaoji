@@ -3199,18 +3199,28 @@
     state.lightboxLayout = layout || null;
     img.src = imageUrl;
     const blocks = (layout && Array.isArray(layout.blocks)) ? layout.blocks : [];
+    const hasPlainText = Boolean(layout && layout.plainText);
     title.textContent = blocks.length
-      ? `净版扫描页 · ${blocks.length} 处版面文字（点文字块可复制）`
-      : '扫描页预览';
+      ? `电子扫描页 · ${blocks.length} 处原位文字（点文字块可复制）`
+      : '电子扫描页预览';
     overlay.innerHTML = blocks.map((b, i) => (
       `<div class="scan-layout-box" data-layout-copy="${i}" title="点击复制" style="left:${(b.x * 100).toFixed(2)}%;top:${(b.y * 100).toFixed(2)}%;width:${(b.w * 100).toFixed(2)}%;height:${(b.h * 100).toFixed(2)}%"></div>`
     )).join('');
-    $('#scanLightboxCopyAllBtn')?.classList.toggle('hidden', !blocks.length);
+    $('#scanLightboxCopyAllBtn')?.classList.toggle('hidden', !blocks.length && !hasPlainText);
     box.classList.remove('hidden');
   }
 
   function closeScanLightbox() {
     $('#scanLightboxBackdrop')?.classList.add('hidden');
+  }
+
+  function getImageDimensions(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth || 1000, height: img.naturalHeight || 1400 });
+      img.onerror = () => resolve({ width: 1000, height: 1400 });
+      img.src = dataUrl;
+    });
   }
 
   async function runOcr(dataUrl, opts = {}) {
@@ -3221,51 +3231,44 @@
       ? ['vision_ai', 'apple', 'ocrspace']
       : (mode === 'ocrspace' ? ['ocrspace', 'apple', 'vision_ai'] : ['apple', 'vision_ai', 'ocrspace']);
 
-    setOcrStatus('正在识别版面并去除背景噪声…');
+    setOcrStatus('正在识别原图版面文字位置…');
     for (const engine of order) {
       if (engine === 'apple' && bridge.available && !opts.skipApple) {
         const base64 = dataUrl.split(',')[1] || '';
-        const ok = bridge.post({ type: 'recognizeOcr', imageBase64: base64, languages: ['zh-Hans', 'en-US'] });
+        const ok = bridge.post({ type: 'recognizeOcr', imageBase64: base64, languages: ['zh-Hans', 'en-US'], filterMode: state.noteScanFilter || 'magic' });
         if (ok) return;
       }
       if (engine === 'vision_ai') {
         const visionNodes = getAiPool().filter((p) => p.visionModel && p.keys.length);
         if (visionNodes.length) {
           try {
-            setOcrStatus('正在用视觉大模型提取版面文字…');
+            setOcrStatus('正在用视觉大模型识别（保留原图版面）…');
             const text = await ocrWithVisionPool(dataUrl);
             if (text) {
-              const rendered = renderCleanPageFromPlainText(text);
-              if (rendered) {
-                state.noteLayout = rendered.layout;
-                setNoteImage(rendered.dataUrl);
-                setOcrStatus(`已生成净版扫描页（视觉模型 · ${rendered.layout.blocks.length} 行 · 点击放大）`);
-                toast('净版扫描页已生成，点击可全屏查看');
-                return;
-              }
+              // 100% 保留原图版面不变，仅保存全文供全屏查看器「复制整页」
+              state.noteLayout = { blocks: [], plainText: text };
+              setOcrStatus(`已识别（视觉模型 · ${text.length} 字 · 点击放大可复制）`);
+              toast('已保留原图版面并完成识字，点击图片可放大');
+              return;
             }
           } catch { /* fallback to next engine */ }
         }
       }
       if (engine === 'ocrspace') {
         try {
-          setOcrStatus('正在用免费 OCR.space 生成净版扫描页…');
-          const text = await ocrWithOcrSpace(dataUrl);
-          if (text) {
-            const rendered = renderCleanPageFromPlainText(text);
-            if (rendered) {
-              state.noteLayout = rendered.layout;
-              setNoteImage(rendered.dataUrl);
-              setOcrStatus(`已生成净版扫描页（OCR.space · ${rendered.layout.blocks.length} 行 · 点击放大）`);
-              toast('净版扫描页已生成，点击可全屏查看');
-              return;
-            }
+          setOcrStatus('正在用 OCR.space 定位原图文字框…');
+          const res = await ocrWithOcrSpace(dataUrl);
+          if (res && (res.blocks.length || res.text)) {
+            // 100% 保留原图版面，将 OCR.space 返回的真实像素坐标转为 0..1 版面框直接叠在原图对应位置
+            state.noteLayout = { blocks: res.blocks, plainText: res.text };
+            setOcrStatus(`已定位原图版面（OCR.space · ${res.blocks.length} 处可点选文字 · 点击放大）`);
+            toast('原图版面定位完成，点击图片可放大并点选复制');
+            return;
           }
         } catch { /* fallback to next engine */ }
       }
     }
-    setOcrStatus('已保留原图（未识别到文字，可点击放大查看）');
-    toast('未识别到文字，已保留原图');
+    setOcrStatus('已保留原图（点击放大查看）');
   }
 
   async function ocrWithVisionPool(dataUrl) {
@@ -3283,13 +3286,14 @@
     const ocrCfg = getMeta('ocrConfig', { mode: 'auto', ocrSpaceKeys: [] }) || {};
     const userKeys = Array.isArray(ocrCfg.ocrSpaceKeys) ? ocrCfg.ocrSpaceKeys.filter(Boolean) : [];
     const keys = userKeys.length ? [...userKeys, 'helloworld'] : ['helloworld'];
+    const dims = await getImageDimensions(dataUrl);
     let lastErr = null;
     for (const apiKey of keys) {
       try {
         const params = new URLSearchParams();
         params.set('base64Image', dataUrl);
         params.set('language', 'chs');
-        params.set('isOverlayRequired', 'false');
+        params.set('isOverlayRequired', 'true');
         params.set('OCREngine', '2');
         params.set('scale', 'true');
         const data = await requestJson('https://api.ocr.space/parse/image', {
@@ -3303,7 +3307,31 @@
         });
         if (data && !data.IsErroredOnProcessing && Array.isArray(data.ParsedResults)) {
           const text = data.ParsedResults.map((r) => String(r.ParsedText || '').trim()).filter(Boolean).join('\n').trim();
-          if (text) return text;
+          const blocks = [];
+          data.ParsedResults.forEach((r) => {
+            const lines = (r.TextOverlay && Array.isArray(r.TextOverlay.Lines)) ? r.TextOverlay.Lines : [];
+            lines.forEach((ln) => {
+              const words = Array.isArray(ln.Words) ? ln.Words : [];
+              const lineText = String(ln.LineText || words.map((w) => w.WordText || '').join('')).trim();
+              if (!lineText || !words.length) return;
+              const minL = Math.min(...words.map((w) => Number(w.Left) || 0));
+              const minT = Math.min(...words.map((w) => Number(w.Top) || 0));
+              const maxR = Math.max(...words.map((w) => (Number(w.Left) || 0) + (Number(w.Width) || 0)));
+              const maxB = Math.max(...words.map((w) => (Number(w.Top) || 0) + (Number(w.Height) || 0)));
+              const nx = clamp(minL / dims.width, 0, 0.99);
+              const ny = clamp(minT / dims.height, 0, 0.99);
+              const nw = clamp((maxR - minL) / dims.width, 0.01, 1 - nx);
+              const nh = clamp((maxB - minT) / dims.height, 0.01, 1 - ny);
+              blocks.push({
+                text: lineText,
+                x: +nx.toFixed(4),
+                y: +ny.toFixed(4),
+                w: +nw.toFixed(4),
+                h: +nh.toFixed(4),
+              });
+            });
+          });
+          if (text || blocks.length) return { text, blocks };
         }
         lastErr = new Error((data && data.ErrorMessage && data.ErrorMessage[0]) || 'OCR.space 未返回文字');
       } catch (err) {
@@ -3401,8 +3429,10 @@
     });
     $('#scanLightboxCopyAllBtn')?.addEventListener('click', async () => {
       const blocks = (state.lightboxLayout && state.lightboxLayout.blocks) || [];
-      if (!blocks.length) return;
-      const allText = blocks.map((b) => b.text).join('\n');
+      const allText = blocks.length
+        ? blocks.map((b) => b.text).join('\n')
+        : String((state.lightboxLayout && state.lightboxLayout.plainText) || '').trim();
+      if (!allText) return;
       try {
         await navigator.clipboard.writeText(allText);
         toast(`已复制整页文字（${allText.length} 字）`);
